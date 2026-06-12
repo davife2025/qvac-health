@@ -1,9 +1,14 @@
 /**
- * CompletionService — wraps @qvac/sdk completion with:
- *   - System prompt injection
- *   - Streaming token iterator
- *   - Non-streaming full text collection
- *   - Timing metadata
+ * CompletionService — updated for @qvac/sdk v0.11.x
+ *
+ * The new canonical API uses `run.events` (AsyncIterable<CompletionEvent>).
+ * `tokenStream` is deprecated but still works — we use `events` for
+ * correctness and future-proofing.
+ *
+ * Event types we care about:
+ *   - "contentDelta"  → { text: string }  (a token or token chunk)
+ *   - "toolCall"      → not used here
+ *   - "done"          → stream finished
  */
 
 import type { CompletionRequest, CompletionResponse } from "@qvac-health/types";
@@ -12,6 +17,18 @@ async function getSDK() {
   return await import("@qvac/sdk");
 }
 
+function buildHistory(request: CompletionRequest) {
+  const history: Array<{ role: "system" | "user"; content: string }> = [];
+  if (request.systemPrompt) {
+    history.push({ role: "system", content: request.systemPrompt });
+  }
+  history.push({ role: "user", content: request.prompt });
+  return history;
+}
+
+/**
+ * Non-streaming: collect all tokens and return full text + timing.
+ */
 export async function runCompletion(
   modelId: string,
   request: CompletionRequest
@@ -19,23 +36,18 @@ export async function runCompletion(
   const sdk = await getSDK();
   const startTime = Date.now();
 
-  const history: Array<{ role: "system" | "user" | "assistant"; content: string }> = [];
-
-  if (request.systemPrompt) {
-    history.push({ role: "system", content: request.systemPrompt });
-  }
-
-  history.push({ role: "user", content: request.prompt });
-
-  const result = sdk.completion({
+  const run = sdk.completion({
     modelId,
-    history,
+    history: buildHistory(request),
     stream: true,
   });
 
   let text = "";
-  for await (const token of result.tokenStream) {
-    text += token;
+
+  for await (const event of run.events) {
+    if (event.type === "contentDelta") {
+      text += event.text;
+    }
   }
 
   return {
@@ -46,8 +58,8 @@ export async function runCompletion(
 }
 
 /**
- * Streaming version — yields tokens as they arrive.
- * Use for SSE responses in the API.
+ * Streaming: yield tokens as they arrive.
+ * Used for SSE responses in the API — the caller writes each token to the response.
  */
 export async function* streamCompletion(
   modelId: string,
@@ -55,21 +67,15 @@ export async function* streamCompletion(
 ): AsyncGenerator<string> {
   const sdk = await getSDK();
 
-  const history: Array<{ role: "system" | "user" | "assistant"; content: string }> = [];
-
-  if (request.systemPrompt) {
-    history.push({ role: "system", content: request.systemPrompt });
-  }
-
-  history.push({ role: "user", content: request.prompt });
-
-  const result = sdk.completion({
+  const run = sdk.completion({
     modelId,
-    history,
+    history: buildHistory(request),
     stream: true,
   });
 
-  for await (const token of result.tokenStream) {
-    yield token;
+  for await (const event of run.events) {
+    if (event.type === "contentDelta" && event.text) {
+      yield event.text;
+    }
   }
 }

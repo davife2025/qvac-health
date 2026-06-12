@@ -14,8 +14,7 @@ export type MoodLevel = 1 | 2 | 3 | 4 | 5;
 export interface JournalEntry {
   id: string;
   userId: string;
-  // Content stays LOCAL — only metadata in Supabase
-  contentHash: string; // SHA-256 of local content for integrity check
+  contentHash: string;
   mood: MoodLevel;
   tags: string[];
   createdAt: string;
@@ -23,33 +22,40 @@ export interface JournalEntry {
 }
 
 export interface JournalEntryLocal extends JournalEntry {
-  content: string; // Lives in local SQLite only
-  aiResponse?: string; // QVAC-generated reflection
+  content: string;
+  aiResponse?: string;
 }
 
 // ─── Clinical SOAP Notes ──────────────────────────────────────────────────────
 
-export interface SOAPNote {
-  id: string;
-  clinicianId: string;
-  patientRef: string; // Anonymous reference, not real ID
+export interface SOAPFields {
   subjective: string;
   objective: string;
   assessment: string;
   plan: string;
+}
+
+export interface SOAPNote {
+  id: string;
+  clinicianId: string;
+  patientRef: string;
+  soap: SOAPFields;
   rawTranscript?: string;
+  durationMs: number;
   generatedAt: string;
+  modelLabel: string;
 }
 
 // ─── QVAC / AI ───────────────────────────────────────────────────────────────
 
-export type ModelType = "llm" | "embeddings" | "tts";
+export type ModelType = "llm" | "embeddings" | "tts" | "whisper";
+
+export type ModelKey = "COMPANION_LLM" | "SOAP_LLM" | "EMBEDDINGS";
 
 export interface ModelStatus {
   modelId: string;
   modelType: ModelType;
   loaded: boolean;
-  progress?: number;
 }
 
 export interface CompletionRequest {
@@ -76,7 +82,7 @@ export interface RAGSearchResult {
   metadata?: Record<string, unknown>;
 }
 
-// ─── API Response wrappers ────────────────────────────────────────────────────
+// ─── API responses ────────────────────────────────────────────────────────────
 
 export interface ApiSuccess<T> {
   ok: true;

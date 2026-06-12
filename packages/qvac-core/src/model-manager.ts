@@ -1,24 +1,26 @@
 /**
  * ModelManager — singleton that owns the QVAC model lifecycle.
  *
- * Responsibilities:
- *   - Load models on first use, reuse across requests
- *   - Track load progress for UI feedback
- *   - Graceful unload on shutdown
- *   - Never let two loads of the same model race
+ * Updated for SDK v0.11.x:
+ *   - loadModel accepts direct HuggingFace HTTPS URLs
+ *   - Built-in constants (e.g. GTE_LARGE_FP16) resolved from SDK exports
+ *   - Progress callback shape updated (progress object with .percentage)
+ *   - getLoadedModelInfo() used for status introspection
  */
 
 import type { ModelStatus, ModelType } from "@qvac-health/types";
+import { MODEL_REGISTRY, type ModelKey } from "./models.js";
 
 interface LoadedModel {
   modelId: string;
+  modelKey: ModelKey;
   modelType: ModelType;
+  label: string;
   loadedAt: number;
 }
 
-type ProgressCallback = (progress: number) => void;
+type ProgressCallback = (percent: number) => void;
 
-// Lazy-loaded so the module can be imported in non-SDK environments (tests, web)
 let sdkModule: typeof import("@qvac/sdk") | null = null;
 
 async function getSDK() {
@@ -30,8 +32,8 @@ async function getSDK() {
 
 export class ModelManager {
   private static instance: ModelManager;
-  private loadedModels = new Map<string, LoadedModel>();
-  private loadingPromises = new Map<string, Promise<string>>();
+  private loadedModels = new Map<ModelKey, LoadedModel>();
+  private loadingPromises = new Map<ModelKey, Promise<string>>();
 
   static getInstance(): ModelManager {
     if (!ModelManager.instance) {
@@ -41,115 +43,107 @@ export class ModelManager {
   }
 
   /**
-   * Load a model by its SDK constant name.
+   * Load a model by its registry key.
    * Safe to call multiple times — returns cached modelId if already loaded.
    */
-  async load(
-    modelConstantName: string,
-    modelType: ModelType,
-    onProgress?: ProgressCallback
-  ): Promise<string> {
-    // Return existing model if loaded
-    const existing = this.findByConstant(modelConstantName);
+  async load(key: ModelKey, onProgress?: ProgressCallback): Promise<string> {
+    const existing = this.loadedModels.get(key);
     if (existing) return existing.modelId;
 
-    // Deduplicate concurrent load requests
-    if (this.loadingPromises.has(modelConstantName)) {
-      return this.loadingPromises.get(modelConstantName)!;
+    if (this.loadingPromises.has(key)) {
+      return this.loadingPromises.get(key)!;
     }
 
-    const loadPromise = this._doLoad(modelConstantName, modelType, onProgress);
-    this.loadingPromises.set(modelConstantName, loadPromise);
+    const loadPromise = this._doLoad(key, onProgress);
+    this.loadingPromises.set(key, loadPromise);
 
     try {
-      const modelId = await loadPromise;
-      return modelId;
+      return await loadPromise;
     } finally {
-      this.loadingPromises.delete(modelConstantName);
+      this.loadingPromises.delete(key);
     }
   }
 
-  private async _doLoad(
-    modelConstantName: string,
-    modelType: ModelType,
-    onProgress?: ProgressCallback
-  ): Promise<string> {
+  private async _doLoad(key: ModelKey, onProgress?: ProgressCallback): Promise<string> {
     const sdk = await getSDK();
+    const entry = MODEL_REGISTRY[key];
 
-    // Resolve the model source from the SDK constant
-    const modelSrc = (sdk as Record<string, unknown>)[modelConstantName] as string;
-    if (!modelSrc) {
-      throw new Error(
-        `Unknown model constant: ${modelConstantName}. Check @qvac/sdk exports.`
-      );
+    // Resolve model source: built-in SDK constant or direct URL
+    let modelSrc: string;
+    if (entry.src in sdk) {
+      modelSrc = (sdk as unknown as Record<string, string>)[entry.src];
+    } else {
+      // Direct URL (HuggingFace HTTPS or pear://)
+      modelSrc = entry.src;
     }
+
+    console.log(`[ModelManager] Loading ${entry.label} from ${modelSrc.slice(0, 60)}...`);
 
     const modelId = await sdk.loadModel({
       modelSrc,
-      modelType,
-      onProgress: (progress: number) => {
-        onProgress?.(Math.round(progress * 100));
+      modelType: entry.type,
+      onProgress: (progress: { percentage: number }) => {
+        const pct = Math.round(progress.percentage ?? 0);
+        onProgress?.(pct);
+        if (pct % 10 === 0) {
+          console.log(`[ModelManager] ${entry.label}: ${pct}%`);
+        }
       },
     });
 
-    this.loadedModels.set(modelConstantName, {
+    this.loadedModels.set(key, {
       modelId,
-      modelType,
+      modelKey: key,
+      modelType: entry.type,
+      label: entry.label,
       loadedAt: Date.now(),
     });
 
-    console.log(`[ModelManager] Loaded ${modelConstantName} → modelId: ${modelId}`);
+    console.log(`[ModelManager] ✅ ${entry.label} ready → ${modelId}`);
     return modelId;
   }
 
-  /**
-   * Get a loaded model's ID. Throws if not loaded.
-   */
-  getModelId(modelConstantName: string): string {
-    const model = this.findByConstant(modelConstantName);
+  getModelId(key: ModelKey): string {
+    const model = this.loadedModels.get(key);
     if (!model) {
-      throw new Error(
-        `Model ${modelConstantName} is not loaded. Call load() first.`
-      );
+      throw new Error(`Model ${key} is not loaded. Call load() first.`);
     }
     return model.modelId;
   }
 
-  /**
-   * Unload a single model and free memory.
-   */
-  async unload(modelConstantName: string): Promise<void> {
-    const model = this.findByConstant(modelConstantName);
+  isLoaded(key: ModelKey): boolean {
+    return this.loadedModels.has(key);
+  }
+
+  isLoading(key: ModelKey): boolean {
+    return this.loadingPromises.has(key);
+  }
+
+  async unload(key: ModelKey): Promise<void> {
+    const model = this.loadedModels.get(key);
     if (!model) return;
 
     const sdk = await getSDK();
     await sdk.unloadModel({ modelId: model.modelId });
-    this.loadedModels.delete(modelConstantName);
-    console.log(`[ModelManager] Unloaded ${modelConstantName}`);
+    this.loadedModels.delete(key);
+    console.log(`[ModelManager] Unloaded ${model.label}`);
   }
 
-  /**
-   * Unload all models. Call on process shutdown.
-   */
   async unloadAll(): Promise<void> {
     const keys = [...this.loadedModels.keys()];
     await Promise.all(keys.map((k) => this.unload(k)));
   }
 
   getStatus(): ModelStatus[] {
-    return [...this.loadedModels.entries()].map(([, m]) => ({
+    return [...this.loadedModels.values()].map((m) => ({
       modelId: m.modelId,
       modelType: m.modelType,
       loaded: true,
     }));
   }
 
-  isLoaded(modelConstantName: string): boolean {
-    return this.loadedModels.has(modelConstantName);
-  }
-
-  private findByConstant(name: string): LoadedModel | undefined {
-    return this.loadedModels.get(name);
+  getLoadedKeys(): ModelKey[] {
+    return [...this.loadedModels.keys()];
   }
 }
 
