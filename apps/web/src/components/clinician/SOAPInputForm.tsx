@@ -27,7 +27,7 @@ export function SOAPInputForm({ onGenerate, generating }: SOAPInputFormProps) {
   const [patientRef, setPatientRef] = useState("");
   const [error, setError] = useState<string | null>(null);
 
-  // Fix #18: cycling index instead of Math.random() — never repeats
+  // Fix #13: increment AFTER reading current index so display is correct
   const exampleIndexRef = useRef(0);
 
   const charLimit = 10000;
@@ -51,8 +51,10 @@ export function SOAPInputForm({ onGenerate, generating }: SOAPInputFormProps) {
   };
 
   const loadExample = () => {
-    const example = EXAMPLES[exampleIndexRef.current % EXAMPLES.length];
-    exampleIndexRef.current += 1;
+    // Fix #13: read current index first, then increment
+    const current = exampleIndexRef.current;
+    const example = EXAMPLES[current % EXAMPLES.length];
+    exampleIndexRef.current = current + 1;
     setRawNotes(example.notes);
     setPatientRef(example.ref);
     setError(null);
@@ -61,6 +63,11 @@ export function SOAPInputForm({ onGenerate, generating }: SOAPInputFormProps) {
   const charCount = rawNotes.length;
   const remaining = charLimit - charCount;
   const tooShort = rawNotes.trim().length < minChars && rawNotes.length > 0;
+
+  // Fix #13: display 1-based index of loaded example
+  const exampleLabel = exampleIndexRef.current > 0
+    ? `(${((exampleIndexRef.current - 1) % EXAMPLES.length) + 1}/${EXAMPLES.length})`
+    : "";
 
   return (
     <div className="card space-y-5">
@@ -77,11 +84,10 @@ export function SOAPInputForm({ onGenerate, generating }: SOAPInputFormProps) {
           disabled={generating}
           className="text-xs text-calm-500 hover:text-calm-700 underline disabled:opacity-40"
         >
-          Load example {exampleIndexRef.current > 0 ? `(${(exampleIndexRef.current % EXAMPLES.length) + 1}/${EXAMPLES.length})` : ""}
+          Load example {exampleLabel}
         </button>
       </div>
 
-      {/* Patient ref */}
       <div className="space-y-1.5">
         <label className="block text-sm font-medium text-gray-700">
           Patient reference
@@ -100,17 +106,12 @@ export function SOAPInputForm({ onGenerate, generating }: SOAPInputFormProps) {
         />
       </div>
 
-      {/* Notes textarea */}
       <div className="space-y-1.5">
         <div className="flex items-center justify-between">
           <label className="block text-sm font-medium text-gray-700">
             Session notes
           </label>
-          <span
-            className={`text-xs tabular-nums ${
-              remaining < 500 ? "text-amber-500" : "text-gray-300"
-            }`}
-          >
+          <span className={`text-xs tabular-nums ${remaining < 500 ? "text-amber-500" : "text-gray-300"}`}>
             {charCount}/{charLimit}
           </span>
         </div>
@@ -120,9 +121,7 @@ export function SOAPInputForm({ onGenerate, generating }: SOAPInputFormProps) {
           disabled={generating}
           rows={10}
           placeholder={EXAMPLES[0].notes}
-          className={`textarea w-full text-sm ${
-            tooShort ? "ring-amber-200 focus:ring-amber-400" : ""
-          }`}
+          className={`textarea w-full text-sm ${tooShort ? "ring-amber-200 focus:ring-amber-400" : ""}`}
         />
         {tooShort && (
           <p className="text-xs text-amber-500">
@@ -131,15 +130,13 @@ export function SOAPInputForm({ onGenerate, generating }: SOAPInputFormProps) {
         )}
       </div>
 
-      {/* Error */}
       {error && (
         <div className="rounded-xl bg-red-50 px-4 py-3 text-sm text-red-700 ring-1 ring-red-200">
           {error}
         </div>
       )}
 
-      {/* Actions */}
-      <div className="flex items-center gap-4">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
         <button
           onClick={handleGenerate}
           disabled={generating || rawNotes.trim().length < minChars || !patientRef.trim()}
@@ -170,7 +167,7 @@ export function SOAPInputForm({ onGenerate, generating }: SOAPInputFormProps) {
             Clear
           </button>
         )}
-        <p className="ml-auto text-xs text-gray-300">🔒 MedPsy-4B · local</p>
+        <p className="text-xs text-gray-300 sm:ml-auto">🔒 MedPsy-4B · local</p>
       </div>
 
       {generating && (

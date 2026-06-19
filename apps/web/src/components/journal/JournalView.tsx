@@ -14,21 +14,14 @@ interface JournalViewProps {
 
 export function JournalView({ userId }: JournalViewProps) {
   const {
-    entries,
-    loading,
-    error,
-    hasMore,
-    loadMore,
-    saveEntry,
-    attachAIResponse,
-    deleteEntry,
+    entries, loading, error, hasMore, loadMore,
+    saveEntry, attachAIResponse, deleteEntry,
   } = useJournal(userId);
 
   const [companionReady, setCompanionReady] = useState(false);
   const [embeddingsReady, setEmbeddingsReady] = useState(false);
   const [search, setSearch] = useState("");
 
-  // Fix #11: backfill existing entries into vector store on first load
   useRAGBackfill(entries, embeddingsReady, userId);
 
   const filtered = search.trim()
@@ -40,34 +33,26 @@ export function JournalView({ userId }: JournalViewProps) {
     : entries;
 
   return (
-    <main className="min-h-full p-4 max-w-2xl mx-auto space-y-6 pb-16">
+    <main className="min-h-full px-4 pt-4 pb-safe max-w-2xl mx-auto space-y-5">
       <header className="space-y-1 pt-2">
         <h1 className="text-2xl font-bold text-gray-900">Your Journal</h1>
         <p className="text-gray-500 text-sm">
-          Private reflections · AI companion · Semantic memory · All on-device
+          Private · AI companion · Semantic memory · All on-device
         </p>
       </header>
 
       {entries.length >= 2 && <MoodSparkline entries={entries} />}
 
-      {/* Step 1: companion LLM */}
       {!companionReady && (
-        <ModelLoader
-          modelKey="COMPANION_LLM"
-          onLoaded={() => setCompanionReady(true)}
-        />
+        <ModelLoader modelKey="COMPANION_LLM" onLoaded={() => setCompanionReady(true)} />
       )}
 
-      {/* Step 2: embeddings for RAG — non-blocking */}
       {companionReady && !embeddingsReady && (
         <div className="space-y-1">
           <p className="text-xs text-gray-400">
-            Loading semantic memory model for related entry suggestions…
+            Loading semantic memory model…
           </p>
-          <ModelLoader
-            modelKey="EMBEDDINGS"
-            onLoaded={() => setEmbeddingsReady(true)}
-          />
+          <ModelLoader modelKey="EMBEDDINGS" onLoaded={() => setEmbeddingsReady(true)} />
         </div>
       )}
 
@@ -91,7 +76,10 @@ export function JournalView({ userId }: JournalViewProps) {
             {search && (
               <button
                 onClick={() => setSearch("")}
-                className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-300 hover:text-gray-500 text-sm"
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-300
+                  hover:text-gray-500 text-sm min-w-[24px] min-h-[24px]
+                  flex items-center justify-center"
+                aria-label="Clear search"
               >
                 ✕
               </button>
@@ -112,7 +100,8 @@ export function JournalView({ userId }: JournalViewProps) {
         )}
 
         {!loading && entries.length === 0 && (
-          <div className="rounded-2xl bg-white p-6 shadow-sm ring-1 ring-gray-100 text-center py-16 space-y-2">
+          <div className="rounded-2xl bg-white p-6 shadow-sm ring-1 ring-gray-100
+            text-center py-16 space-y-2">
             <p className="text-4xl">🌱</p>
             <p className="font-semibold text-gray-500">Your journal is empty</p>
             <p className="text-sm text-gray-400">
@@ -137,13 +126,12 @@ export function JournalView({ userId }: JournalViewProps) {
           />
         ))}
 
-        {/* Fix #14: load more pagination */}
         {hasMore && !search && (
           <div className="text-center pt-2">
             <button
               onClick={loadMore}
               disabled={loading}
-              className="btn-secondary text-sm"
+              className="btn-secondary text-sm w-full sm:w-auto"
             >
               {loading ? "Loading…" : "Load older entries"}
             </button>

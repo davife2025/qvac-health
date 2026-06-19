@@ -15,9 +15,7 @@ export function useCompanionStream(options: UseCompanionStreamOptions = {}) {
   const [error, setError] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
 
-  // Fix #2: store callbacks in refs so useCallback doesn't depend on options object.
-  // This prevents stream() from being recreated every render when the parent
-  // passes an inline object literal as options.
+  // Stable callback refs — no re-render when options object changes
   const onTokenRef = useRef(options.onToken);
   const onDoneRef = useRef(options.onDone);
   const onErrorRef = useRef(options.onError);
@@ -28,7 +26,6 @@ export function useCompanionStream(options: UseCompanionStreamOptions = {}) {
     onErrorRef.current = options.onError;
   });
 
-  // Memoised client — fix #1 pattern applied here too
   const supabase = useRef(createClient()).current;
 
   const stream = useCallback(async (journalText: string) => {
@@ -39,6 +36,8 @@ export function useCompanionStream(options: UseCompanionStreamOptions = {}) {
     setStreaming(true);
     setText("");
     setError(null);
+
+    let full = "";
 
     try {
       const { data: { session } } = await supabase.auth.getSession();
@@ -59,31 +58,48 @@ export function useCompanionStream(options: UseCompanionStreamOptions = {}) {
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
       let buffer = "";
-      let full = "";
 
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
+      // Fix #5: wrap the read loop in its own try/catch so mid-stream
+      // errors (model crash, OOM) are caught and surfaced to the user
+      // rather than leaving the SSE connection hanging.
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
 
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n\n");
-        buffer = lines.pop() ?? "";
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split("\n\n");
+          buffer = lines.pop() ?? "";
 
-        for (const line of lines) {
-          if (!line.startsWith("data: ")) continue;
-          const event = JSON.parse(line.slice(6));
+          for (const line of lines) {
+            if (!line.startsWith("data: ")) continue;
 
-          if (event.token) {
-            full += event.token;
-            setText(full);
-            onTokenRef.current?.(event.token);
-          } else if (event.done) {
-            onDoneRef.current?.(full);
-            return;
-          } else if (event.error) {
-            throw new Error(event.error);
+            let event: Record<string, unknown>;
+            try {
+              event = JSON.parse(line.slice(6));
+            } catch {
+              // Malformed SSE line — skip
+              continue;
+            }
+
+            if (event.token) {
+              full += event.token as string;
+              setText(full);
+              onTokenRef.current?.(event.token as string);
+            } else if (event.done) {
+              onDoneRef.current?.(full);
+              return;
+            } else if (event.error) {
+              throw new Error(event.error as string);
+            }
           }
         }
+      } catch (streamErr) {
+        // Re-throw to be caught below, unless it's an abort
+        if (streamErr instanceof Error && streamErr.name === "AbortError") return;
+        throw streamErr;
+      } finally {
+        reader.cancel().catch(() => {});
       }
     } catch (err) {
       if (err instanceof Error && err.name === "AbortError") return;
@@ -93,11 +109,14 @@ export function useCompanionStream(options: UseCompanionStreamOptions = {}) {
     } finally {
       setStreaming(false);
     }
-  }, []); // stable — no deps needed, all callbacks via refs
+  }, []); // stable — all callbacks via refs
 
+  // Fix #15: cancel now also resets text/error so retrying starts clean
   const cancel = useCallback(() => {
     abortRef.current?.abort();
     setStreaming(false);
+    setText("");
+    setError(null);
   }, []);
 
   const reset = useCallback(() => {

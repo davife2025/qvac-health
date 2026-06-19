@@ -1,13 +1,9 @@
 /**
  * SOAP note metadata routes.
  *
- * Same privacy pattern as journal:
- *   - Generated SOAP JSON lives in IndexedDB on device
- *   - Supabase only stores: id, clinician_id, patient_ref, content_hash, created_at
- *
- * GET  /soap/notes           — list metadata for authed clinician
- * POST /soap/notes           — save new note metadata
- * DELETE /soap/notes/:id     — delete metadata record
+ * Fix: GET /soap/notes now accepts ?page=N&pageSize=N query params,
+ * matching the pagination pattern added to journal.ts in S13.
+ * Hard .limit(200) replaced with paginated range query.
  */
 
 import type { FastifyInstance } from "fastify";
@@ -21,31 +17,50 @@ const createSchema = z.object({
   contentHash: z.string().length(64),
 });
 
+const PAGE_SIZE = 50;
+
 export async function soapRoutes(app: FastifyInstance, { env }: { env: Env }) {
   const auth = requireAuth(app, env);
   const clinicianOnly = requireRole("clinician");
   const guards = [auth, clinicianOnly];
-
   const sb = () => getSupabaseClient(env);
 
-  /** GET /soap/notes — list metadata, newest first */
+  /** GET /soap/notes?page=0&pageSize=50 */
   app.get("/soap/notes", { preHandler: guards }, async (req, reply) => {
+    const query = req.query as Record<string, string>;
+    const page = Math.max(0, parseInt(query.page ?? "0", 10) || 0);
+    const pageSize = Math.min(
+      PAGE_SIZE,
+      Math.max(1, parseInt(query.pageSize ?? `${PAGE_SIZE}`, 10) || PAGE_SIZE)
+    );
+
+    const from = page * pageSize;
+    const to = from + pageSize - 1;
+
     const { data, error } = await sb()
       .from("soap_notes")
       .select("id, patient_ref, content_hash, created_at")
       .eq("clinician_id", req.user!.id)
       .order("created_at", { ascending: false })
-      .limit(200);
+      .range(from, to);
 
     if (error) {
       app.log.error(error, "Failed to fetch SOAP notes");
       return reply.code(500).send({ ok: false, error: "Database error" });
     }
 
-    return reply.send({ ok: true, data });
+    return reply.send({
+      ok: true,
+      data,
+      meta: {
+        page,
+        pageSize,
+        hasMore: (data ?? []).length === pageSize,
+      },
+    });
   });
 
-  /** POST /soap/notes — create metadata record */
+  /** POST /soap/notes */
   app.post("/soap/notes", { preHandler: guards }, async (req, reply) => {
     const body = createSchema.safeParse(req.body);
     if (!body.success) {

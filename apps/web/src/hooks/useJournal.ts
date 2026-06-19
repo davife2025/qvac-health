@@ -38,12 +38,9 @@ export function useJournal(userId: string) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [hasMore, setHasMore] = useState(false);
-  const [page, setPage] = useState(0);
 
-  // Fix #1: memoised client — never recreated across renders
+  const pageRef = useRef(0);
   const supabase = useMemo(() => createClient(), []);
-
-  // Fix #7: save race guard
   const savingRef = useRef(false);
 
   const loadEntries = useCallback(async (pageIndex = 0) => {
@@ -79,11 +76,9 @@ export function useJournal(userId: string) {
         };
       });
 
-      setEntries((prev) =>
-        pageIndex === 0 ? merged : [...prev, ...merged]
-      );
+      setEntries((prev) => (pageIndex === 0 ? merged : [...prev, ...merged]));
       setHasMore((rows ?? []).length === PAGE_SIZE);
-      setPage(pageIndex);
+      pageRef.current = pageIndex;
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load entries");
     } finally {
@@ -96,18 +91,17 @@ export function useJournal(userId: string) {
   }, [loadEntries]);
 
   const loadMore = useCallback(() => {
-    if (!loading && hasMore) loadEntries(page + 1);
-  }, [loading, hasMore, page, loadEntries]);
+    if (!loading && hasMore) {
+      loadEntries(pageRef.current + 1);
+    }
+  }, [loading, hasMore, loadEntries]);
 
   const saveEntry = useCallback(
     async (content: string, mood: MoodLevel, tags: string[]) => {
-      // Fix #7: prevent concurrent saves
       if (savingRef.current) throw new Error("Save already in progress");
       savingRef.current = true;
-
       try {
         const contentHash = await hashContent(content);
-
         const { data: { session } } = await supabase.auth.getSession();
         const token = session?.access_token;
         if (!token) throw new Error("Not authenticated");
@@ -121,7 +115,10 @@ export function useJournal(userId: string) {
           body: JSON.stringify({ contentHash, mood, tags }),
         });
 
-        if (!res.ok) throw new Error("Failed to save metadata");
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({}));
+          throw new Error(body.error ?? "Failed to save metadata");
+        }
         const { data: row } = await res.json();
 
         await saveContent({ id: row.id, content, savedAt: Date.now() });
@@ -163,15 +160,30 @@ export function useJournal(userId: string) {
       const token = session?.access_token;
       if (!token) throw new Error("Not authenticated");
 
-      await fetch(`/api/journal/entries/${id}`, {
-        method: "DELETE",
-        headers: { Authorization: `Bearer ${token}` },
-      });
-
-      await deleteContent(id);
+      // Fix #10: optimistic removal with rollback on failure
+      const prevEntries = entries;
       setEntries((prev) => prev.filter((e) => e.id !== id));
+
+      try {
+        const res = await fetch(`/api/journal/entries/${id}`, {
+          method: "DELETE",
+          headers: { Authorization: `Bearer ${token}` },
+        });
+
+        // 404 = already gone remotely, that's fine
+        if (!res.ok && res.status !== 404) {
+          throw new Error("Failed to delete entry");
+        }
+
+        // Only delete local content after remote confirms
+        await deleteContent(id);
+      } catch (err) {
+        // Rollback optimistic removal
+        setEntries(prevEntries);
+        throw err;
+      }
     },
-    [supabase]
+    [supabase, entries]
   );
 
   return {

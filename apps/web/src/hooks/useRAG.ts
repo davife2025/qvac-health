@@ -13,7 +13,6 @@ export function useJournalRAG() {
   const [results, setResults] = useState<RAGSearchResult[]>([]);
   const [error, setError] = useState<string | null>(null);
 
-  // Fix #17: stable client ref — not recreated on every getToken() call
   const supabase = useRef(createClient()).current;
 
   const getToken = useCallback(async () => {
@@ -32,7 +31,7 @@ export function useJournalRAG() {
     if (!token) return;
 
     try {
-      await fetch("/api/rag/ingest/journal", {
+      const res = await fetch("/api/rag/ingest/journal", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -40,8 +39,20 @@ export function useJournalRAG() {
         },
         body: JSON.stringify(params),
       });
+
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        // Bug fix: 503 EMBEDDINGS_NOT_LOADED is expected when model isn't
+        // loaded yet — log at debug level, not as an error
+        if (body.code === "EMBEDDINGS_NOT_LOADED") {
+          console.debug("[RAG] Skipping ingest — embeddings not loaded yet");
+          return;
+        }
+        console.warn("[RAG] Journal ingest failed:", body.error);
+      }
     } catch (err) {
-      console.warn("[RAG] Journal ingest failed (non-blocking):", err);
+      // Network errors during background ingest are non-blocking
+      console.warn("[RAG] Journal ingest network error (non-blocking):", err);
     }
   }, [getToken]);
 
@@ -124,7 +135,7 @@ export function useSOAPRAG() {
     ].join("\n\n");
 
     try {
-      await fetch("/api/rag/ingest/soap", {
+      const res = await fetch("/api/rag/ingest/soap", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -137,8 +148,17 @@ export function useSOAPRAG() {
           generatedAt: params.generatedAt,
         }),
       });
+
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        if (body.code === "EMBEDDINGS_NOT_LOADED") {
+          console.debug("[RAG] Skipping SOAP ingest — embeddings not loaded yet");
+          return;
+        }
+        console.warn("[RAG] SOAP ingest failed:", body.error);
+      }
     } catch (err) {
-      console.warn("[RAG] SOAP ingest failed (non-blocking):", err);
+      console.warn("[RAG] SOAP ingest network error (non-blocking):", err);
     }
   }, [getToken]);
 

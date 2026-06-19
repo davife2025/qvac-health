@@ -1,8 +1,9 @@
 /**
- * AI routes — S3 update: auth-protected.
+ * AI routes — auth-protected, SSE streaming.
  *
- * userId now comes from the verified JWT (request.user), not the request body.
- * This prevents any user from claiming another user's ID.
+ * Fix: handle client disconnect mid-stream gracefully.
+ * reply.raw.write() throws EPIPE if the socket is destroyed.
+ * We check req.socket.destroyed before writing and catch write errors.
  */
 
 import type { FastifyInstance } from "fastify";
@@ -62,22 +63,41 @@ export async function aiRoutes(app: FastifyInstance, { env }: { env: Env }) {
         "Access-Control-Allow-Origin": "*",
       });
 
-      const send = (payload: object) =>
-        reply.raw.write(`data: ${JSON.stringify(payload)}\n\n`);
+      // Fix #2: safe write — check socket is still open before writing
+      const send = (payload: object): boolean => {
+        if (req.socket.destroyed) return false;
+        try {
+          reply.raw.write(`data: ${JSON.stringify(payload)}\n\n`);
+          return true;
+        } catch {
+          // EPIPE or similar — client disconnected
+          return false;
+        }
+      };
 
       try {
-        for await (const token of streamCompletion(modelId, {
+        const stream = streamCompletion(modelId, {
           prompt: body.data.text,
           systemPrompt: SYSTEM_PROMPTS.COMPANION,
-        })) {
-          send({ token });
+        });
+
+        for await (const token of stream) {
+          const ok = send({ token });
+          // If client disconnected mid-stream, stop generating
+          if (!ok) {
+            app.log.info({ userId: req.user?.id }, "SSE client disconnected mid-stream");
+            return;
+          }
         }
+
         send({ done: true });
       } catch (err) {
         app.log.error(err, "Companion completion error");
         send({ error: "Inference failed" });
       } finally {
-        reply.raw.end();
+        if (!req.socket.destroyed) {
+          reply.raw.end();
+        }
       }
     }
   );
@@ -129,9 +149,10 @@ export async function aiRoutes(app: FastifyInstance, { env }: { env: Env }) {
         const required = ["subjective", "objective", "assessment", "plan"];
         const missing = required.filter((f) => !soap[f]);
         if (missing.length) {
-          return reply
-            .code(500)
-            .send({ ok: false, error: `Incomplete SOAP. Missing: ${missing.join(", ")}` });
+          return reply.code(500).send({
+            ok: false,
+            error: `Incomplete SOAP note. Missing: ${missing.join(", ")}`,
+          });
         }
 
         return reply.send({

@@ -18,71 +18,39 @@ const SECTIONS: {
   description: string;
   fallback: string;
 }[] = [
-  {
-    key: "subjective",
-    label: "Subjective",
-    icon: "💬",
-    description: "Patient's own words, reported symptoms, history",
-    fallback: "No subjective information recorded.",
-  },
-  {
-    key: "objective",
-    label: "Objective",
-    icon: "🔍",
-    description: "Clinician observations, mental status exam findings",
-    fallback: "No objective findings recorded.",
-  },
-  {
-    key: "assessment",
-    label: "Assessment",
-    icon: "🧠",
-    description: "Clinical impression, diagnostic considerations",
-    fallback: "No assessment recorded.",
-  },
-  {
-    key: "plan",
-    label: "Plan",
-    icon: "📋",
-    description: "Treatment plan, next steps, referrals, follow-up",
-    fallback: "No plan recorded.",
-  },
+  { key: "subjective",  label: "Subjective", icon: "💬", description: "Patient's own words, reported symptoms, history",        fallback: "No subjective information recorded." },
+  { key: "objective",   label: "Objective",  icon: "🔍", description: "Clinician observations, mental status exam findings",     fallback: "No objective findings recorded." },
+  { key: "assessment",  label: "Assessment", icon: "🧠", description: "Clinical impression, diagnostic considerations",           fallback: "No assessment recorded." },
+  { key: "plan",        label: "Plan",       icon: "📋", description: "Treatment plan, next steps, referrals, follow-up",        fallback: "No plan recorded." },
 ];
 
-function CopyButton({ text }: { text: string }) {
-  const [copied, setCopied] = useState(false);
-
-  const copy = async () => {
-    await navigator.clipboard.writeText(text);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1500);
-  };
-
-  return (
-    <button
-      onClick={copy}
-      className="text-xs text-gray-300 hover:text-gray-500 transition-colors"
-      title="Copy to clipboard"
-    >
-      {copied ? "✓ Copied" : "Copy"}
-    </button>
-  );
-}
-
-// Fix #8: validate SOAP fields before render — guard against partial LLM output
-// stored in IndexedDB before the API-level validation was added in S5.
-function validateSOAP(soap: SOAPFields): { valid: boolean; missing: string[] } {
+function validateSOAP(soap: SOAPFields) {
   const missing = SECTIONS.filter(
     (s) => !soap[s.key] || soap[s.key].trim().length === 0
   ).map((s) => s.label);
   return { valid: missing.length === 0, missing };
 }
 
+function CopyButton({ text, label }: { text: string; label?: string }) {
+  const [copied, setCopied] = useState(false);
+  const copy = async () => {
+    await navigator.clipboard.writeText(text);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1500);
+  };
+  return (
+    <button
+      onClick={copy}
+      className="shrink-0 rounded-lg px-2 py-1 text-xs text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors"
+      title={`Copy ${label ?? ""}`}
+    >
+      {copied ? "✓" : "Copy"}
+    </button>
+  );
+}
+
 export function SOAPNoteDisplay({
-  soap,
-  patientRef,
-  generatedAt,
-  durationMs,
-  modelLabel,
+  soap, patientRef, generatedAt, durationMs, modelLabel,
 }: SOAPNoteDisplayProps) {
   const { valid, missing } = validateSOAP(soap);
 
@@ -104,31 +72,30 @@ export function SOAPNoteDisplay({
       {/* Incomplete note warning */}
       {!valid && (
         <div className="rounded-xl bg-amber-50 px-4 py-3 text-sm text-amber-700 ring-1 ring-amber-200">
-          ⚠️ This note is missing:{" "}
-          <span className="font-medium">{missing.join(", ")}</span>. It may have
-          been saved from an earlier model run. Try regenerating.
+          ⚠️ Missing: <span className="font-medium">{missing.join(", ")}</span>. Try regenerating.
         </div>
       )}
 
-      {/* Header bar */}
-      <div className="flex items-center justify-between flex-wrap gap-2">
-        <div className="space-y-0.5">
-          <p className="text-sm font-semibold text-gray-900">
-            Patient ref:{" "}
-            <span className="font-mono">{patientRef}</span>
+      {/* Header — stacks on mobile */}
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+        <div className="space-y-0.5 min-w-0">
+          <p className="text-sm font-semibold text-gray-900 truncate">
+            Patient ref: <span className="font-mono">{patientRef}</span>
           </p>
           <p className="text-xs text-gray-400">
-            {new Date(generatedAt).toLocaleString()} ·{" "}
-            {(durationMs / 1000).toFixed(1)}s ·{" "}
-            <span className="text-calm-600">{modelLabel}</span> · on-device
+            {new Date(generatedAt).toLocaleString()} · {(durationMs / 1000).toFixed(1)}s ·{" "}
+            <span className="text-calm-600">{modelLabel}</span>
           </p>
         </div>
-        <button onClick={copyAll} className="btn-secondary text-xs py-1.5 px-3">
+        <button
+          onClick={copyAll}
+          className="btn-secondary text-xs py-1.5 px-3 self-start sm:self-auto shrink-0"
+        >
           {copiedAll ? "✓ Copied!" : "Copy all"}
         </button>
       </div>
 
-      {/* Four SOAP panels */}
+      {/* SOAP panels — 1 col on mobile, 2 col on sm+ */}
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         {SECTIONS.map((section) => {
           const content = soap[section.key]?.trim();
@@ -141,26 +108,22 @@ export function SOAPNoteDisplay({
                 isEmpty ? "ring-amber-100" : "ring-gray-100"
               }`}
             >
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-1.5">
-                  <span className="text-base">{section.icon}</span>
-                  <span className="text-sm font-semibold text-gray-900">
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-1.5 min-w-0">
+                  <span className="text-base shrink-0">{section.icon}</span>
+                  <span className="text-sm font-semibold text-gray-900 truncate">
                     {section.label}
                   </span>
                   {isEmpty && (
-                    <span className="text-[10px] text-amber-500">missing</span>
+                    <span className="text-[10px] text-amber-500 shrink-0">missing</span>
                   )}
                 </div>
-                {!isEmpty && <CopyButton text={content} />}
+                {!isEmpty && <CopyButton text={content} label={section.label} />}
               </div>
-              <p className="text-xs text-gray-400 leading-snug">
-                {section.description}
-              </p>
-              <p
-                className={`text-sm leading-relaxed whitespace-pre-wrap border-t border-gray-50 pt-2 ${
-                  isEmpty ? "text-gray-300 italic" : "text-gray-700"
-                }`}
-              >
+              <p className="text-xs text-gray-400 leading-snug">{section.description}</p>
+              <p className={`text-sm leading-relaxed whitespace-pre-wrap break-words border-t border-gray-50 pt-2 ${
+                isEmpty ? "text-gray-300 italic" : "text-gray-700"
+              }`}>
                 {content || section.fallback}
               </p>
             </div>
@@ -169,8 +132,7 @@ export function SOAPNoteDisplay({
       </div>
 
       <p className="text-center text-xs text-gray-300">
-        🔒 Generated locally · Clinical content stays on this device · Never
-        sent to cloud
+        🔒 Generated locally · Never sent to cloud
       </p>
     </div>
   );

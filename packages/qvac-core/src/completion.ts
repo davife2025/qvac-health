@@ -1,14 +1,9 @@
 /**
- * CompletionService — updated for @qvac/sdk v0.11.x
+ * CompletionService — @qvac/sdk v0.11.x
  *
- * The new canonical API uses `run.events` (AsyncIterable<CompletionEvent>).
- * `tokenStream` is deprecated but still works — we use `events` for
- * correctness and future-proofing.
- *
- * Event types we care about:
- *   - "contentDelta"  → { text: string }  (a token or token chunk)
- *   - "toolCall"      → not used here
- *   - "done"          → stream finished
+ * Fix: runCompletion now handles mid-stream errors and includes any
+ * partial text accumulated before the error in the thrown message.
+ * This helps with debugging OOM/model-crash scenarios.
  */
 
 import type { CompletionRequest, CompletionResponse } from "@qvac-health/types";
@@ -28,6 +23,7 @@ function buildHistory(request: CompletionRequest) {
 
 /**
  * Non-streaming: collect all tokens and return full text + timing.
+ * Fix #4: wraps the event loop in try/catch; includes partial text in error.
  */
 export async function runCompletion(
   modelId: string,
@@ -44,10 +40,20 @@ export async function runCompletion(
 
   let text = "";
 
-  for await (const event of run.events) {
-    if (event.type === "contentDelta") {
-      text += event.text;
+  try {
+    for await (const event of run.events) {
+      if (event.type === "contentDelta") {
+        text += event.text;
+      }
     }
+  } catch (err) {
+    // Include partial text in error context for debugging
+    const partial = text.trim();
+    const msg = err instanceof Error ? err.message : "Unknown inference error";
+    const detail = partial.length > 0
+      ? `${msg} (partial output: ${partial.slice(0, 100)}…)`
+      : msg;
+    throw new Error(detail);
   }
 
   return {
@@ -59,7 +65,7 @@ export async function runCompletion(
 
 /**
  * Streaming: yield tokens as they arrive.
- * Used for SSE responses in the API — the caller writes each token to the response.
+ * Caller is responsible for catching errors from this generator.
  */
 export async function* streamCompletion(
   modelId: string,

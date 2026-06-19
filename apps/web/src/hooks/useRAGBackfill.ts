@@ -8,29 +8,31 @@ import type { LocalEntry } from "./useJournal";
 const BACKFILL_KEY = "qvac-rag-backfill-done-v1";
 
 /**
- * useRAGBackfill — runs once per device per user to seed the vector store
- * with all existing journal entries.
+ * useRAGBackfill — one-time backfill of existing journal entries into local vector store.
  *
- * Without this, users who had entries before S6 (when RAG was added) would
- * see no results in RelatedEntries since the vector store was empty.
+ * Bug fix: `entries` was in the useEffect dep array — the effect was re-running
+ * every time entries updated (on every pagination load, every new save).
  *
- * Strategy:
- *   - Check localStorage for a backfill-done flag keyed by userId
- *   - If not set, fetch all local content + ingest in batches of 5
- *   - Set flag when complete — never runs again on this device
- *   - Runs in the background, does not block UI
+ * Fix: entries are captured via a ref snapshot. The effect only depends on
+ * [embeddingsReady, userId] — both stable once set.
  */
 export function useRAGBackfill(
   entries: LocalEntry[],
   embeddingsReady: boolean,
   userId: string
 ) {
+  // Snapshot entries in a ref — never in effect deps
+  const entriesRef = useRef(entries);
+  useEffect(() => {
+    entriesRef.current = entries;
+  });
+
   const runningRef = useRef(false);
   const supabase = useRef(createClient()).current;
 
   useEffect(() => {
-    if (!embeddingsReady) return;
-    if (entries.length === 0) return;
+    // Only run once embeddingsReady is true and userId is set
+    if (!embeddingsReady || !userId) return;
     if (runningRef.current) return;
 
     const flagKey = `${BACKFILL_KEY}-${userId}`;
@@ -44,22 +46,27 @@ export function useRAGBackfill(
         if (!session) return;
 
         const token = session.access_token;
-
-        // Get all local content (includes entries not yet ingested)
         const allContent = await getAllContent();
-        if (allContent.length === 0) return;
+        if (allContent.length === 0) {
+          localStorage.setItem(flagKey, "1");
+          return;
+        }
 
         console.log(`[RAG backfill] Ingesting ${allContent.length} existing entries...`);
 
-        // Batch in groups of 5 to avoid hammering the API route
+        // Use the ref snapshot — stable, won't change mid-loop
+        const entriesSnapshot = entriesRef.current;
+        const metaMap = new Map(entriesSnapshot.map((e) => [e.id, e]));
+
         const BATCH = 5;
         for (let i = 0; i < allContent.length; i += BATCH) {
           const batch = allContent.slice(i, i + BATCH);
 
           await Promise.allSettled(
             batch.map(async (local) => {
-              // Find the metadata for this entry (mood + tags)
-              const meta = entries.find((e) => e.id === local.id);
+              const meta = metaMap.get(local.id);
+              // Skip entries with no content (cloud-only metadata rows)
+              if (!local.content?.trim()) return;
 
               await fetch("/api/rag/ingest/journal", {
                 method: "POST",
@@ -78,7 +85,6 @@ export function useRAGBackfill(
             })
           );
 
-          // Small delay between batches — don't block model inference
           if (i + BATCH < allContent.length) {
             await new Promise((r) => setTimeout(r, 300));
           }
@@ -88,11 +94,12 @@ export function useRAGBackfill(
         console.log(`[RAG backfill] Complete — ${allContent.length} entries indexed`);
       } catch (err) {
         console.warn("[RAG backfill] Failed (non-blocking):", err);
+        // Don't set the flag — allow retry on next mount
       } finally {
         runningRef.current = false;
       }
     };
 
     run();
-  }, [embeddingsReady, entries, userId, supabase]);
+  }, [embeddingsReady, userId, supabase]); // entries intentionally excluded
 }

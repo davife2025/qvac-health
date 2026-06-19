@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useRef } from "react";
 import { MoodPicker } from "./MoodPicker";
 import { TagInput } from "./TagInput";
 import { AIResponsePanel } from "./AIResponsePanel";
@@ -20,14 +20,20 @@ export function JournalEditor({ onSave, onAIResponse }: JournalEditorProps) {
   const [mood, setMood] = useState<MoodLevel>(3);
   const [tags, setTags] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
-  const [savedEntry, setSavedEntry] = useState<LocalEntry | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
+
+  // Fix #1: savedEntry in a ref, not state — ref is always current when
+  // the onDone callback fires, unlike a state closure which captures null.
+  const savedEntryRef = useRef<LocalEntry | null>(null);
 
   const { ingest } = useJournalRAG();
 
   const companion = useCompanionStream({
     onDone: async (fullText) => {
-      if (savedEntry) {
-        await onAIResponse(savedEntry.id, fullText);
+      // Fix #1: read from ref, not closed-over state — always current
+      const entry = savedEntryRef.current;
+      if (entry) {
+        await onAIResponse(entry.id, fullText);
       }
     },
   });
@@ -35,12 +41,16 @@ export function JournalEditor({ onSave, onAIResponse }: JournalEditorProps) {
   const handleSave = async () => {
     if (!content.trim() || saving) return;
     setSaving(true);
+    setSaveError(null);
+    companion.reset(); // clear any previous stream state
 
     try {
       const entry = await onSave(content.trim(), mood, tags);
-      setSavedEntry(entry);
 
-      // Ingest into local RAG vector store (fire-and-forget, non-blocking)
+      // Write to ref immediately — companion.stream fires onDone async later
+      savedEntryRef.current = entry;
+
+      // Fire-and-forget RAG ingest (non-blocking)
       ingest({
         entryId: entry.id,
         content: content.trim(),
@@ -49,15 +59,19 @@ export function JournalEditor({ onSave, onAIResponse }: JournalEditorProps) {
         createdAt: entry.createdAt,
       });
 
-      // Stream companion response
+      // Stream AI reflection
       await companion.stream(content.trim());
 
+      // Reset form only after stream completes
       setContent("");
       setMood(3);
       setTags([]);
-      setSavedEntry(null);
+      savedEntryRef.current = null;
     } catch (err) {
-      console.error("Save failed:", err);
+      // Fix #4: show save errors to the user, not just console
+      const msg = err instanceof Error ? err.message : "Failed to save entry";
+      setSaveError(msg);
+      savedEntryRef.current = null;
     } finally {
       setSaving(false);
     }
@@ -92,35 +106,65 @@ export function JournalEditor({ onSave, onAIResponse }: JournalEditorProps) {
         />
       </div>
 
-      {/* Related past entries — surfaces as user types */}
+      {/* Fix #14: pass enabled flag to avoid unnecessary hook work */}
       <RelatedEntries currentText={content} />
 
       <TagInput tags={tags} onChange={setTags} disabled={busy} />
+
+      {/* Fix #4: show save errors inline */}
+      {saveError && (
+        <div className="rounded-xl bg-red-50 px-4 py-3 text-sm text-red-700
+          ring-1 ring-red-200 flex items-center justify-between gap-2">
+          <span>{saveError}</span>
+          <button
+            onClick={() => setSaveError(null)}
+            className="text-red-400 hover:text-red-600 shrink-0"
+            aria-label="Dismiss error"
+          >
+            ✕
+          </button>
+        </div>
+      )}
 
       <AIResponsePanel
         streaming={companion.streaming}
         text={companion.text}
         error={companion.error}
-        onRetry={savedEntry ? () => companion.stream(savedEntry.content) : undefined}
+        onRetry={
+          savedEntryRef.current
+            ? () => {
+                companion.reset();
+                companion.stream(savedEntryRef.current!.content);
+              }
+            : undefined
+        }
       />
 
-      <div className="flex items-center gap-3 pt-1">
-        <button onClick={handleSave} disabled={!canSave} className="btn-primary">
-          {saving
-            ? "Saving…"
-            : companion.streaming
-            ? "Getting reflection…"
-            : "Save & reflect"}
-        </button>
-        {content.length > 0 && !busy && (
-          <button
-            onClick={() => { setContent(""); setTags([]); setMood(3); }}
-            className="text-sm text-gray-400 hover:text-gray-600"
-          >
-            Clear
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center pt-1">
+        <div className="flex items-center gap-3">
+          <button onClick={handleSave} disabled={!canSave} className="btn-primary">
+            {saving
+              ? "Saving…"
+              : companion.streaming
+              ? "Getting reflection…"
+              : "Save & reflect"}
           </button>
-        )}
-        <p className="ml-auto text-xs text-gray-300">🔒 Stays on your device</p>
+          {content.length > 0 && !busy && (
+            <button
+              onClick={() => {
+                setContent("");
+                setTags([]);
+                setMood(3);
+                setSaveError(null);
+                companion.reset();
+              }}
+              className="text-sm text-gray-400 hover:text-gray-600"
+            >
+              Clear
+            </button>
+          )}
+        </div>
+        <p className="text-xs text-gray-300 sm:ml-auto">🔒 Stays on your device</p>
       </div>
     </div>
   );

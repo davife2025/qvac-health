@@ -10,13 +10,15 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
   const next = params.next ?? "/";
 
   return (
-    <main className="flex min-h-full flex-col items-center justify-center px-4 py-16">
-      <div className="w-full max-w-sm space-y-8">
+    <main className="flex min-h-full flex-col items-center justify-center px-4 py-8 sm:py-16">
+      <div className="w-full max-w-sm space-y-6 sm:space-y-8">
         {/* Header */}
         <div className="text-center space-y-2">
           <Link
             href="/"
-            className="inline-flex items-center justify-center w-12 h-12 rounded-xl bg-calm-600 text-white text-xl font-bold shadow-md"
+            className="inline-flex items-center justify-center w-12 h-12 rounded-xl
+              bg-calm-600 text-white text-xl font-bold shadow-md
+              active:scale-95 transition-transform"
           >
             Q
           </Link>
@@ -44,6 +46,7 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
               name="email"
               type="email"
               autoComplete="email"
+              autoFocus
               required
               className="input"
               placeholder="you@example.com"
@@ -65,7 +68,11 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
             />
           </div>
 
-          <button type="submit" className="btn-primary w-full mt-2">
+          {/* Full-width, min 48px tall for touch */}
+          <button
+            type="submit"
+            className="btn-primary w-full mt-2 min-h-[48px] text-base"
+          >
             Sign in
           </button>
         </form>
@@ -74,7 +81,7 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
           Don&apos;t have an account?{" "}
           <Link
             href="/auth/signup"
-            className="font-medium text-calm-600 hover:text-calm-700"
+            className="font-medium text-calm-600 hover:text-calm-700 underline-offset-2 hover:underline"
           >
             Sign up
           </Link>

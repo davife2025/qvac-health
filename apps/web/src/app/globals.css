@@ -5,6 +5,9 @@
 @layer base {
   :root {
     --font-geist-sans: "Geist", system-ui, sans-serif;
+    /* Safe area for iPhone notch / home indicator */
+    --safe-top: env(safe-area-inset-top);
+    --safe-bottom: env(safe-area-inset-bottom);
   }
 
   html {
@@ -22,6 +25,12 @@
   button, a, [role="button"] {
     touch-action: manipulation;
   }
+
+  /* Prevent iOS font size bump on orientation change */
+  body {
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
+  }
 }
 
 @layer components {
@@ -29,7 +38,8 @@
     @apply inline-flex items-center justify-center rounded-xl bg-calm-600 px-5 py-2.5
       text-sm font-semibold text-white shadow-sm transition-all
       hover:bg-calm-700 active:scale-[0.98]
-      focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-calm-600
+      focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2
+      focus-visible:outline-calm-600
       disabled:opacity-50 disabled:cursor-not-allowed disabled:active:scale-100;
   }
 
@@ -41,7 +51,7 @@
   }
 
   .card {
-    @apply rounded-2xl bg-white p-6 shadow-sm ring-1 ring-gray-100;
+    @apply rounded-2xl bg-white p-4 sm:p-6 shadow-sm ring-1 ring-gray-100;
   }
 
   .input {
@@ -62,16 +72,10 @@
 }
 
 @layer utilities {
-  /* Used by Toast component */
+  /* Toast slide-in */
   @keyframes slide-in-from-bottom {
-    from {
-      transform: translateY(0.5rem);
-      opacity: 0;
-    }
-    to {
-      transform: translateY(0);
-      opacity: 1;
-    }
+    from { transform: translateY(0.5rem); opacity: 0; }
+    to   { transform: translateY(0);       opacity: 1; }
   }
 
   .animate-in {
@@ -84,11 +88,25 @@
     animation-name: slide-in-from-bottom;
   }
 
-  /* Line clamp utility (for SOAP search result bodies) */
+  /* Line clamp */
   .line-clamp-4 {
     display: -webkit-box;
     -webkit-line-clamp: 4;
     -webkit-box-orient: vertical;
     overflow: hidden;
+  }
+
+  /* Hide scrollbar on chip rows (mobile horizontal scroll) */
+  .scrollbar-none {
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+  .scrollbar-none::-webkit-scrollbar {
+    display: none;
+  }
+
+  /* Safe area padding for phones with home indicator */
+  .pb-safe {
+    padding-bottom: max(1rem, env(safe-area-inset-bottom));
   }
 }

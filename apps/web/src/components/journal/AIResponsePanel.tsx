@@ -17,25 +17,33 @@ export function AIResponsePanel({
 
   return (
     <div className="rounded-2xl bg-calm-50 p-4 ring-1 ring-calm-100 space-y-2">
-      {/* Header */}
-      <div className="flex items-center gap-2">
-        <div className="flex h-6 w-6 items-center justify-center rounded-full bg-calm-600 text-white text-xs font-bold">
-          Q
+      {/* Header — wraps gracefully on narrow screens */}
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+        <div className="flex items-center gap-2 min-w-0">
+          <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-calm-600 text-white text-xs font-bold">
+            Q
+          </div>
+          <span className="text-xs font-semibold text-calm-700 whitespace-nowrap">
+            QVAC Companion
+          </span>
         </div>
-        <span className="text-xs font-semibold text-calm-700">
-          QVAC Companion
-        </span>
+
         {streaming && (
-          <span className="ml-auto flex items-center gap-1 text-xs text-calm-500">
+          <span className="flex items-center gap-1 text-xs text-calm-500">
             <span className="inline-flex gap-0.5">
-              <span className="w-1 h-1 rounded-full bg-calm-400 animate-bounce [animation-delay:0ms]" />
-              <span className="w-1 h-1 rounded-full bg-calm-400 animate-bounce [animation-delay:150ms]" />
-              <span className="w-1 h-1 rounded-full bg-calm-400 animate-bounce [animation-delay:300ms]" />
+              {[0, 150, 300].map((delay) => (
+                <span
+                  key={delay}
+                  className="w-1 h-1 rounded-full bg-calm-400 animate-bounce"
+                  style={{ animationDelay: `${delay}ms` }}
+                />
+              ))}
             </span>
-            thinking…
+            <span>thinking…</span>
           </span>
         )}
-        <span className="ml-auto text-[10px] text-calm-400 bg-calm-100 rounded-full px-2 py-0.5">
+
+        <span className="ml-auto text-[10px] text-calm-400 bg-calm-100 rounded-full px-2 py-0.5 whitespace-nowrap">
           on-device · private
         </span>
       </div>
@@ -54,7 +62,7 @@ export function AIResponsePanel({
           )}
         </div>
       ) : (
-        <p className="text-sm text-calm-900 leading-relaxed whitespace-pre-wrap">
+        <p className="text-sm text-calm-900 leading-relaxed whitespace-pre-wrap break-words">
           {text}
           {streaming && (
             <span className="inline-block w-0.5 h-4 ml-0.5 bg-calm-500 animate-pulse align-text-bottom" />

@@ -15,7 +15,7 @@
     "clean": "rm -rf dist"
   },
   "dependencies": {
-    "@qvac/sdk": "^0.8.0",
+    "@qvac/sdk": "^0.11.0",
     "@qvac-health/types": "workspace:*"
   },
   "devDependencies": {

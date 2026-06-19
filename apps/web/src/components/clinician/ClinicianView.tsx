@@ -30,11 +30,14 @@ export function ClinicianView({ clinicianId }: ClinicianViewProps) {
 
   const handleGenerate = async (rawNotes: string, patientRef: string) => {
     setSelectedNote(null);
+    // Bug fix: generate() returns the finalNote (real UUID after Supabase sync).
+    // Always ingest using the returned note, not a captured reference.
     const note = await generate(rawNotes, patientRef);
     setSelectedNote(note);
     setTab("new");
 
-    // Ingest into RAG (fire-and-forget)
+    // Ingest the finalNote — id is the real UUID if sync succeeded,
+    // or temp UUID if it failed (ingest will use whatever id it has)
     ingestSOAP({
       noteId: note.id,
       patientRef: note.patientRef,
@@ -55,13 +58,13 @@ export function ClinicianView({ clinicianId }: ClinicianViewProps) {
   };
 
   const TABS: { id: Tab; label: string }[] = [
-    { id: "new", label: "New note" },
+    { id: "new",     label: "New note" },
     { id: "history", label: `History${notes.length > 0 ? ` (${notes.length})` : ""}` },
-    { id: "search", label: "Search" },
+    { id: "search",  label: "Search" },
   ];
 
   return (
-    <main className="min-h-full p-4 max-w-5xl mx-auto space-y-6 pb-16">
+    <main className="min-h-full p-4 max-w-5xl mx-auto space-y-6 pb-safe">
       <header className="space-y-1 pt-2">
         <h1 className="text-2xl font-bold text-gray-900">SOAP Note Generator</h1>
         <p className="text-gray-500 text-sm">
@@ -69,23 +72,18 @@ export function ClinicianView({ clinicianId }: ClinicianViewProps) {
         </p>
       </header>
 
-      {/* Model loaders */}
       {!modelReady && (
         <ModelLoader modelKey="SOAP_LLM" onLoaded={() => setModelReady(true)} />
       )}
       {modelReady && !embeddingsReady && (
-        <ModelLoader
-          modelKey="EMBEDDINGS"
-          onLoaded={() => setEmbeddingsReady(true)}
-        />
+        <ModelLoader modelKey="EMBEDDINGS" onLoaded={() => setEmbeddingsReady(true)} />
       )}
 
       {modelReady && (
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
-          {/* Left: main content area */}
           <div className="lg:col-span-2 space-y-6">
-            {/* Tab switcher */}
-            <div className="flex gap-1 rounded-xl bg-gray-100 p-1 w-fit">
+            {/* Tabs */}
+            <div className="flex gap-1 rounded-xl bg-gray-100 p-1 w-full sm:w-fit overflow-x-auto">
               {TABS.map((t) => (
                 <button
                   key={t.id}
@@ -94,25 +92,24 @@ export function ClinicianView({ clinicianId }: ClinicianViewProps) {
                     if (t.id !== "history") setSelectedNote(null);
                     if (t.id === "new") resetGeneration();
                   }}
-                  className={`rounded-lg px-4 py-1.5 text-sm font-medium transition-colors whitespace-nowrap ${
-                    tab === t.id
+                  className={`flex-1 sm:flex-none rounded-lg px-3 sm:px-4 py-1.5 text-sm
+                    font-medium transition-colors whitespace-nowrap
+                    ${tab === t.id
                       ? "bg-white text-gray-900 shadow-sm"
-                      : "text-gray-500 hover:text-gray-700"
-                  }`}
+                      : "text-gray-500 hover:text-gray-700"}`}
                 >
                   {t.label}
                 </button>
               ))}
             </div>
 
-            {/* New note tab */}
             {tab === "new" && (
               <SOAPInputForm onGenerate={handleGenerate} generating={generating} />
             )}
 
-            {/* Error state */}
             {generation.status === "error" && tab === "new" && (
-              <div className="rounded-xl bg-red-50 px-4 py-4 text-sm text-red-700 ring-1 ring-red-200 space-y-2">
+              <div className="rounded-xl bg-red-50 px-4 py-4 text-sm text-red-700
+                ring-1 ring-red-200 space-y-2">
                 <p className="font-medium">Generation failed</p>
                 <p>{generation.message}</p>
                 <button onClick={resetGeneration} className="text-xs underline">
@@ -121,7 +118,6 @@ export function ClinicianView({ clinicianId }: ClinicianViewProps) {
               </div>
             )}
 
-            {/* SOAP result display */}
             {selectedNote && (tab === "new" || tab === "history") && (
               <SOAPNoteDisplay
                 soap={selectedNote.soap}
@@ -132,32 +128,30 @@ export function ClinicianView({ clinicianId }: ClinicianViewProps) {
               />
             )}
 
-            {/* History tab — prompt to select */}
             {tab === "history" && !selectedNote && (
               <div className="card text-center py-12 text-gray-400 space-y-2">
-                <p className="text-2xl">👈</p>
-                <p className="text-sm">Select a note from the sidebar</p>
+                <p className="text-2xl">👆</p>
+                <p className="text-sm">Select a note from the history list</p>
               </div>
             )}
 
-            {/* Search tab */}
             {tab === "search" && (
               <div className="card">
                 {embeddingsReady ? (
-                  <SOAPSemanticSearch
-                    patientRef={selectedNote?.patientRef}
-                  />
+                  <SOAPSemanticSearch patientRef={selectedNote?.patientRef} />
                 ) : (
                   <div className="text-center py-8 text-gray-400 space-y-2">
                     <p className="text-2xl">⏳</p>
-                    <p className="text-sm">Load the embeddings model above to enable search</p>
+                    <p className="text-sm">
+                      Load the embeddings model above to enable search
+                    </p>
                   </div>
                 )}
               </div>
             )}
           </div>
 
-          {/* Right: sidebar */}
+          {/* Sidebar */}
           <div className="space-y-4">
             {loading ? (
               <div className="card text-center py-8 text-gray-400 text-sm">

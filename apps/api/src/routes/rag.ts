@@ -1,13 +1,10 @@
 /**
  * RAG routes — on-device semantic search via QVAC SDK.
  *
- * POST /rag/ingest/journal   — embed a journal entry into the local vector store
- * POST /rag/ingest/soap      — embed a SOAP note into the local vector store
- * POST /rag/search/journal   — semantic search over journal entries
- * POST /rag/search/soap      — semantic search over SOAP notes by patient ref
- *
- * All vectors live in local SQLite-vec via the QVAC SDK ragIngest/ragSearch.
- * Nothing is sent to any external service.
+ * Fix #8: removed dead `lazy` parameter from getEmbeddingsModelId().
+ * Both branches returned null regardless of lazy value.
+ * Ingest: requires model pre-loaded (returns 503 if not).
+ * Search: lazy-loads model (acceptable for explicit user action).
  */
 
 import type { FastifyInstance } from "fastify";
@@ -32,7 +29,6 @@ const ingestJournalSchema = z.object({
 const ingestSOAPSchema = z.object({
   noteId: z.string().uuid(),
   patientRef: z.string().min(1),
-  // We embed the concatenated SOAP fields — not raw notes (keeps it clinical)
   soapText: z.string().min(1).max(8000),
   generatedAt: z.string(),
 });
@@ -43,17 +39,22 @@ const searchSchema = z.object({
 });
 
 const soapSearchSchema = searchSchema.extend({
-  patientRef: z.string().optional(), // filter to one patient if provided
+  patientRef: z.string().optional(),
 });
+
+// Fix #8: simplified — no dead lazy param
+function getLoadedEmbeddingsId(): string | null {
+  if (!modelManager.isLoaded("EMBEDDINGS")) return null;
+  return modelManager.getModelId("EMBEDDINGS");
+}
 
 export async function ragRoutes(app: FastifyInstance, { env }: { env: Env }) {
   const auth = requireAuth(app, env);
   const patientOnly = requireRole("patient");
   const clinicianOnly = requireRole("clinician");
 
-  // ─── Journal RAG ───────────────────────────────────────────────────────────
+  // ─── Journal ingest ────────────────────────────────────────────────────────
 
-  /** POST /rag/ingest/journal */
   app.post(
     "/rag/ingest/journal",
     { preHandler: [auth, patientOnly] },
@@ -63,16 +64,17 @@ export async function ragRoutes(app: FastifyInstance, { env }: { env: Env }) {
         return reply.code(400).send({ ok: false, error: "Invalid body" });
       }
 
-      let modelId: string;
-      try {
-        modelId = await modelManager.load("EMBEDDINGS");
-      } catch {
-        return reply.code(503).send({ ok: false, error: "Embeddings model not available" });
+      const modelId = getLoadedEmbeddingsId();
+      if (!modelId) {
+        return reply.code(503).send({
+          ok: false,
+          error: "Embeddings model not loaded. Load it via POST /models/load first.",
+          code: "EMBEDDINGS_NOT_LOADED",
+        });
       }
 
       const { entryId, content, mood, tags, createdAt } = body.data;
 
-      // Prefix with metadata so the vector carries context for retrieval
       const document = [
         `[Journal entry ${entryId}]`,
         `Date: ${createdAt}`,
@@ -94,7 +96,8 @@ export async function ragRoutes(app: FastifyInstance, { env }: { env: Env }) {
     }
   );
 
-  /** POST /rag/search/journal */
+  // ─── Journal search ────────────────────────────────────────────────────────
+
   app.post(
     "/rag/search/journal",
     { preHandler: [auth, patientOnly] },
@@ -108,7 +111,7 @@ export async function ragRoutes(app: FastifyInstance, { env }: { env: Env }) {
       try {
         modelId = await modelManager.load("EMBEDDINGS");
       } catch {
-        return reply.code(503).send({ ok: false, error: "Embeddings model not available" });
+        return reply.code(503).send({ ok: false, error: "Embeddings model unavailable" });
       }
 
       try {
@@ -125,9 +128,8 @@ export async function ragRoutes(app: FastifyInstance, { env }: { env: Env }) {
     }
   );
 
-  // ─── SOAP RAG ──────────────────────────────────────────────────────────────
+  // ─── SOAP ingest ───────────────────────────────────────────────────────────
 
-  /** POST /rag/ingest/soap */
   app.post(
     "/rag/ingest/soap",
     { preHandler: [auth, clinicianOnly] },
@@ -137,11 +139,13 @@ export async function ragRoutes(app: FastifyInstance, { env }: { env: Env }) {
         return reply.code(400).send({ ok: false, error: "Invalid body" });
       }
 
-      let modelId: string;
-      try {
-        modelId = await modelManager.load("EMBEDDINGS");
-      } catch {
-        return reply.code(503).send({ ok: false, error: "Embeddings model not available" });
+      const modelId = getLoadedEmbeddingsId();
+      if (!modelId) {
+        return reply.code(503).send({
+          ok: false,
+          error: "Embeddings model not loaded. Load it via POST /models/load first.",
+          code: "EMBEDDINGS_NOT_LOADED",
+        });
       }
 
       const { noteId, patientRef, soapText, generatedAt } = body.data;
@@ -164,7 +168,8 @@ export async function ragRoutes(app: FastifyInstance, { env }: { env: Env }) {
     }
   );
 
-  /** POST /rag/search/soap */
+  // ─── SOAP search ───────────────────────────────────────────────────────────
+
   app.post(
     "/rag/search/soap",
     { preHandler: [auth, clinicianOnly] },
@@ -178,10 +183,9 @@ export async function ragRoutes(app: FastifyInstance, { env }: { env: Env }) {
       try {
         modelId = await modelManager.load("EMBEDDINGS");
       } catch {
-        return reply.code(503).send({ ok: false, error: "Embeddings model not available" });
+        return reply.code(503).send({ ok: false, error: "Embeddings model unavailable" });
       }
 
-      // If patientRef provided, prefix query to bias results toward that patient
       const query = body.data.patientRef
         ? `Patient: ${body.data.patientRef} — ${body.data.query}`
         : body.data.query;

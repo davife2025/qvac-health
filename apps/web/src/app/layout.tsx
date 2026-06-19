@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import "./globals.css";
 import { Nav } from "@/components/Nav";
 import { ToastProvider } from "@/components/ui/Toast";
@@ -17,6 +17,13 @@ export const metadata: Metadata = {
     description: "On-device AI for mental health journaling and clinical documentation.",
     type: "website",
   },
+};
+
+// Separate viewport export — required by Next.js 15 for viewport-fit
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  viewportFit: "cover", // enables safe-area-inset-* on notched iPhones
 };
 
 export default async function RootLayout({

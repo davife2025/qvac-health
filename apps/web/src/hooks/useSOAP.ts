@@ -19,12 +19,11 @@ export type GenerationState =
   | { status: "done"; note: LocalSOAPNote }
   | { status: "error"; message: string };
 
-export function useSOAP(clinicianId: string) {
+export function useSOAP(_clinicianId: string) {
   const [notes, setNotes] = useState<LocalSOAPNote[]>([]);
   const [loading, setLoading] = useState(true);
   const [generation, setGeneration] = useState<GenerationState>({ status: "idle" });
 
-  // Fix #1: memoised client
   const supabase = useMemo(() => createClient(), []);
 
   const loadNotes = useCallback(async () => {
@@ -44,6 +43,8 @@ export function useSOAP(clinicianId: string) {
     loadNotes();
   }, [loadNotes]);
 
+  // Bug fix: removed `clinicianId` from deps — it was never used inside
+  // the callback, causing unnecessary recreation on every render.
   const generate = useCallback(
     async (rawNotes: string, patientRef: string) => {
       setGeneration({ status: "generating" });
@@ -56,11 +57,9 @@ export function useSOAP(clinicianId: string) {
       }
 
       const token = session.access_token;
-
       let soap: SOAPFields;
       let aiData: { durationMs: number; modelLabel: string; generatedAt: string };
 
-      // Step 1: Generate SOAP via QVAC LLM
       try {
         const res = await fetch("/api/ai/soap", {
           method: "POST",
@@ -89,7 +88,7 @@ export function useSOAP(clinicianId: string) {
         throw err;
       }
 
-      // Step 2: Save locally first (use a temp ID until Supabase gives us a real one)
+      // Save locally with temp ID — replaced once Supabase sync succeeds
       const tempId = crypto.randomUUID();
       const contentHash = await hashContent(JSON.stringify(soap));
 
@@ -105,10 +104,8 @@ export function useSOAP(clinicianId: string) {
       };
 
       await saveSOAPNote(tempNote);
-      // Optimistically add to UI
       setNotes((prev) => [tempNote, ...prev]);
 
-      // Step 3: Sync metadata to Supabase — get real UUID back
       let finalNote = tempNote;
 
       try {
@@ -124,27 +121,20 @@ export function useSOAP(clinicianId: string) {
         if (!metaRes.ok) throw new Error("Metadata sync failed");
 
         const { data: metaRow } = await metaRes.json();
-
-        // Replace temp note with real Supabase-keyed note
         finalNote = { ...tempNote, id: metaRow.id };
+
         await saveSOAPNote(finalNote);
         await deleteSOAPNote(tempId);
-
-        setNotes((prev) =>
-          prev.map((n) => (n.id === tempId ? finalNote : n))
-        );
+        setNotes((prev) => prev.map((n) => (n.id === tempId ? finalNote : n)));
       } catch (syncErr) {
-        // Fix #5: metadata sync failed — note stays locally with temp ID.
-        // Mark it with a flag so the UI can show a warning and retry.
-        console.error("[useSOAP] Metadata sync failed, note saved locally with temp ID:", syncErr);
-        // Don't throw — the note is safely persisted locally.
-        // The user can still use it; it just won't appear on other devices.
+        // Note persists locally with temp ID — user still has it
+        console.warn("[useSOAP] Metadata sync failed, note saved locally:", syncErr);
       }
 
       setGeneration({ status: "done", note: finalNote });
       return finalNote;
     },
-    [supabase, clinicianId]
+    [supabase] // clinicianId intentionally removed — not used inside
   );
 
   const deleteNote = useCallback(
@@ -153,7 +143,6 @@ export function useSOAP(clinicianId: string) {
       const token = session?.access_token;
       if (!token) throw new Error("Not authenticated");
 
-      // Best-effort remote delete (may 404 if it was a temp-ID note)
       await fetch(`/api/soap/notes/${id}`, {
         method: "DELETE",
         headers: { Authorization: `Bearer ${token}` },

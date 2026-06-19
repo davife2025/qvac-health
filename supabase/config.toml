@@ -34,4 +34,6 @@ enable_signup = true
 [auth.email]
 enable_signup = true
 double_confirm_changes = true
+# Fix #6: disabled for local dev — signups would hang waiting for confirmation email.
+# In production (Supabase cloud), enable this in the project dashboard.
 enable_confirmations = false

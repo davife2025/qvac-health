@@ -1,34 +1,27 @@
 /**
  * Model management routes.
  *
- * POST /models/load     — pre-load a model (with SSE progress stream)
- * GET  /models/status   — list all loaded models + loading state
- * POST /models/unload   — unload a specific model to free RAM
- *
- * Models also lazy-load on first use via the AI routes, but pre-loading
- * via this endpoint lets the UI show a download progress bar and confirm
- * the engine is ready before the user starts a session.
+ * Fix: z.enum now uses an explicit const tuple instead of a runtime
+ * cast from Object.keys() — which TypeScript couldn't verify as non-empty.
  */
 
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { modelManager, MODEL_REGISTRY, type ModelKey } from "@qvac-health/qvac-core";
 
-const MODEL_KEYS = Object.keys(MODEL_REGISTRY) as ModelKey[];
+// Fix #4: explicit tuple literal — type-safe, no unsound cast
+const MODEL_KEY_ENUM = ["COMPANION_LLM", "SOAP_LLM", "EMBEDDINGS"] as const satisfies readonly ModelKey[];
 
 const loadSchema = z.object({
-  key: z.enum(MODEL_KEYS as [ModelKey, ...ModelKey[]]),
+  key: z.enum(MODEL_KEY_ENUM),
 });
 
 const unloadSchema = z.object({
-  key: z.enum(MODEL_KEYS as [ModelKey, ...ModelKey[]]),
+  key: z.enum(MODEL_KEY_ENUM),
 });
 
 export async function modelRoutes(app: FastifyInstance) {
-  /**
-   * GET /models/status
-   * Returns which models are loaded + which are in the registry.
-   */
+  /** GET /models/status */
   app.get("/models/status", async (_req, reply) => {
     const loaded = modelManager.getStatus();
     const registry = Object.entries(MODEL_REGISTRY).map(([key, entry]) => ({
@@ -43,12 +36,7 @@ export async function modelRoutes(app: FastifyInstance) {
     return reply.send({ ok: true, data: { loaded, registry } });
   });
 
-  /**
-   * POST /models/load
-   * Streams SSE progress while downloading + loading the model.
-   *
-   * Body: { key: "COMPANION_LLM" | "SOAP_LLM" | "EMBEDDINGS" }
-   */
+  /** POST /models/load — SSE progress stream */
   app.post("/models/load", async (req, reply) => {
     const body = loadSchema.safeParse(req.body);
     if (!body.success) {
@@ -57,12 +45,10 @@ export async function modelRoutes(app: FastifyInstance) {
 
     const { key } = body.data;
 
-    // If already loaded, respond immediately
     if (modelManager.isLoaded(key)) {
       return reply.send({ ok: true, data: { key, status: "already_loaded" } });
     }
 
-    // Stream SSE progress
     reply.raw.writeHead(200, {
       "Content-Type": "text/event-stream",
       "Cache-Control": "no-cache",
@@ -71,7 +57,12 @@ export async function modelRoutes(app: FastifyInstance) {
     });
 
     const sendEvent = (payload: object) => {
-      reply.raw.write(`data: ${JSON.stringify(payload)}\n\n`);
+      if (req.socket.destroyed) return;
+      try {
+        reply.raw.write(`data: ${JSON.stringify(payload)}\n\n`);
+      } catch {
+        // Client disconnected
+      }
     };
 
     try {
@@ -87,14 +78,13 @@ export async function modelRoutes(app: FastifyInstance) {
       app.log.error(err, `Failed to load model ${key}`);
       sendEvent({ type: "error", key, error: message });
     } finally {
-      reply.raw.end();
+      if (!req.socket.destroyed) {
+        reply.raw.end();
+      }
     }
   });
 
-  /**
-   * POST /models/unload
-   * Frees the model from memory. Useful on low-RAM devices.
-   */
+  /** POST /models/unload */
   app.post("/models/unload", async (req, reply) => {
     const body = unloadSchema.safeParse(req.body);
     if (!body.success) {
