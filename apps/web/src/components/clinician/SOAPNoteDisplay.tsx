@@ -11,30 +11,40 @@ interface SOAPNoteDisplayProps {
   modelLabel: string;
 }
 
-const SECTIONS: { key: keyof SOAPFields; label: string; icon: string; description: string }[] = [
+const SECTIONS: {
+  key: keyof SOAPFields;
+  label: string;
+  icon: string;
+  description: string;
+  fallback: string;
+}[] = [
   {
     key: "subjective",
     label: "Subjective",
     icon: "💬",
     description: "Patient's own words, reported symptoms, history",
+    fallback: "No subjective information recorded.",
   },
   {
     key: "objective",
     label: "Objective",
     icon: "🔍",
     description: "Clinician observations, mental status exam findings",
+    fallback: "No objective findings recorded.",
   },
   {
     key: "assessment",
     label: "Assessment",
     icon: "🧠",
     description: "Clinical impression, diagnostic considerations",
+    fallback: "No assessment recorded.",
   },
   {
     key: "plan",
     label: "Plan",
     icon: "📋",
     description: "Treatment plan, next steps, referrals, follow-up",
+    fallback: "No plan recorded.",
   },
 ];
 
@@ -58,6 +68,15 @@ function CopyButton({ text }: { text: string }) {
   );
 }
 
+// Fix #8: validate SOAP fields before render — guard against partial LLM output
+// stored in IndexedDB before the API-level validation was added in S5.
+function validateSOAP(soap: SOAPFields): { valid: boolean; missing: string[] } {
+  const missing = SECTIONS.filter(
+    (s) => !soap[s.key] || soap[s.key].trim().length === 0
+  ).map((s) => s.label);
+  return { valid: missing.length === 0, missing };
+}
+
 export function SOAPNoteDisplay({
   soap,
   patientRef,
@@ -65,68 +84,93 @@ export function SOAPNoteDisplay({
   durationMs,
   modelLabel,
 }: SOAPNoteDisplayProps) {
+  const { valid, missing } = validateSOAP(soap);
+
   const fullText = SECTIONS.map(
-    (s) => `${s.label.toUpperCase()}\n${soap[s.key]}`
+    (s) => `${s.label.toUpperCase()}\n${soap[s.key] || s.fallback}`
   ).join("\n\n");
 
   const [copiedAll, setCopiedAll] = useState(false);
 
   const copyAll = async () => {
-    await navigator.clipboard.writeText(
-      `SOAP Note — Patient: ${patientRef}\nGenerated: ${new Date(generatedAt).toLocaleString()}\n\n${fullText}`
-    );
+    const header = `SOAP Note — Patient: ${patientRef}\nGenerated: ${new Date(generatedAt).toLocaleString()}\n\n`;
+    await navigator.clipboard.writeText(header + fullText);
     setCopiedAll(true);
     setTimeout(() => setCopiedAll(false), 1500);
   };
 
   return (
     <div className="space-y-4">
+      {/* Incomplete note warning */}
+      {!valid && (
+        <div className="rounded-xl bg-amber-50 px-4 py-3 text-sm text-amber-700 ring-1 ring-amber-200">
+          ⚠️ This note is missing:{" "}
+          <span className="font-medium">{missing.join(", ")}</span>. It may have
+          been saved from an earlier model run. Try regenerating.
+        </div>
+      )}
+
       {/* Header bar */}
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between flex-wrap gap-2">
         <div className="space-y-0.5">
           <p className="text-sm font-semibold text-gray-900">
-            Patient ref: <span className="font-mono">{patientRef}</span>
+            Patient ref:{" "}
+            <span className="font-mono">{patientRef}</span>
           </p>
           <p className="text-xs text-gray-400">
-            {new Date(generatedAt).toLocaleString()} · {(durationMs / 1000).toFixed(1)}s ·{" "}
+            {new Date(generatedAt).toLocaleString()} ·{" "}
+            {(durationMs / 1000).toFixed(1)}s ·{" "}
             <span className="text-calm-600">{modelLabel}</span> · on-device
           </p>
         </div>
-        <button
-          onClick={copyAll}
-          className="btn-secondary text-xs py-1.5 px-3"
-        >
+        <button onClick={copyAll} className="btn-secondary text-xs py-1.5 px-3">
           {copiedAll ? "✓ Copied!" : "Copy all"}
         </button>
       </div>
 
       {/* Four SOAP panels */}
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-        {SECTIONS.map((section) => (
-          <div
-            key={section.key}
-            className="rounded-2xl bg-white p-4 shadow-sm ring-1 ring-gray-100 space-y-2"
-          >
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-1.5">
-                <span className="text-base">{section.icon}</span>
-                <span className="text-sm font-semibold text-gray-900">
-                  {section.label}
-                </span>
+        {SECTIONS.map((section) => {
+          const content = soap[section.key]?.trim();
+          const isEmpty = !content;
+
+          return (
+            <div
+              key={section.key}
+              className={`rounded-2xl bg-white p-4 shadow-sm ring-1 space-y-2 ${
+                isEmpty ? "ring-amber-100" : "ring-gray-100"
+              }`}
+            >
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-1.5">
+                  <span className="text-base">{section.icon}</span>
+                  <span className="text-sm font-semibold text-gray-900">
+                    {section.label}
+                  </span>
+                  {isEmpty && (
+                    <span className="text-[10px] text-amber-500">missing</span>
+                  )}
+                </div>
+                {!isEmpty && <CopyButton text={content} />}
               </div>
-              <CopyButton text={soap[section.key]} />
+              <p className="text-xs text-gray-400 leading-snug">
+                {section.description}
+              </p>
+              <p
+                className={`text-sm leading-relaxed whitespace-pre-wrap border-t border-gray-50 pt-2 ${
+                  isEmpty ? "text-gray-300 italic" : "text-gray-700"
+                }`}
+              >
+                {content || section.fallback}
+              </p>
             </div>
-            <p className="text-xs text-gray-400 leading-snug">{section.description}</p>
-            <p className="text-sm text-gray-700 leading-relaxed whitespace-pre-wrap border-t border-gray-50 pt-2">
-              {soap[section.key]}
-            </p>
-          </div>
-        ))}
+          );
+        })}
       </div>
 
-      {/* Privacy footer */}
       <p className="text-center text-xs text-gray-300">
-        🔒 Generated locally · Clinical content stays on this device · Never sent to cloud
+        🔒 Generated locally · Clinical content stays on this device · Never
+        sent to cloud
       </p>
     </div>
   );
