@@ -8,6 +8,7 @@ import { modelRoutes } from "./routes/models.js";
 import { journalRoutes } from "./routes/journal.js";
 import { soapRoutes } from "./routes/soap.js";
 import { ragRoutes } from "./routes/rag.js";
+import { loggerPlugin } from "./plugins/logger.js";
 import { modelManager, closeWorkspace, RAG_WORKSPACES } from "@qvac-health/qvac-core";
 
 const env = validateEnv();
@@ -22,17 +23,22 @@ const app = Fastify({
   },
 });
 
+// ─── Plugins ──────────────────────────────────────────────────────────────────
+
 await app.register(cors, {
   origin:
     env.NODE_ENV === "development"
       ? ["http://localhost:3000"]
-      : [process.env.WEB_URL ?? ""],
+      : [env.WEB_URL ?? ""],
   methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
   allowedHeaders: ["Content-Type", "Authorization"],
   credentials: true,
 });
 
 await app.register(sensible);
+await app.register(loggerPlugin);
+
+// ─── Routes ───────────────────────────────────────────────────────────────────
 
 await app.register(healthRoutes);
 await app.register(modelRoutes);
@@ -41,16 +47,19 @@ await app.register(journalRoutes, { env });
 await app.register(soapRoutes, { env });
 await app.register(ragRoutes, { env });
 
+// ─── Graceful shutdown ────────────────────────────────────────────────────────
+
 const shutdown = async (signal: string) => {
-  app.log.info(`Received ${signal}, shutting down...`);
+  app.log.info(`[shutdown] Received ${signal}`);
   try {
     await closeWorkspace(RAG_WORKSPACES.JOURNAL).catch(() => {});
     await closeWorkspace(RAG_WORKSPACES.SOAP).catch(() => {});
     await modelManager.unloadAll();
     await app.close();
+    app.log.info("[shutdown] Clean exit");
     process.exit(0);
   } catch (err) {
-    app.log.error(err, "Error during shutdown");
+    app.log.error(err, "[shutdown] Error");
     process.exit(1);
   }
 };
@@ -58,9 +67,25 @@ const shutdown = async (signal: string) => {
 process.on("SIGINT", () => shutdown("SIGINT"));
 process.on("SIGTERM", () => shutdown("SIGTERM"));
 
+// ─── Start ────────────────────────────────────────────────────────────────────
+
 try {
   await app.listen({ port: env.API_PORT, host: env.API_HOST });
-  app.log.info(`🚀 QVAC Health API → http://${env.API_HOST}:${env.API_PORT}`);
+
+  console.log(`
+  ╔═══════════════════════════════════════════╗
+  ║         QVAC Health API  🧠🔒             ║
+  ╠═══════════════════════════════════════════╣
+  ║  http://${env.API_HOST}:${env.API_PORT}                     ║
+  ║                                           ║
+  ║  GET  /health          → status           ║
+  ║  GET  /models/status   → model registry   ║
+  ║  POST /models/load     → load + progress  ║
+  ║  POST /ai/companion    → SSE stream       ║
+  ║  POST /ai/soap         → SOAP note JSON   ║
+  ║  POST /rag/search/*    → semantic search  ║
+  ╚═══════════════════════════════════════════╝
+  `);
 } catch (err) {
   app.log.error(err);
   process.exit(1);

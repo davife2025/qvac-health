@@ -7,6 +7,10 @@ export const envSchema = z.object({
   SUPABASE_URL: z.string().url(),
   SUPABASE_SERVICE_ROLE_KEY: z.string().min(1),
   QVAC_MODEL_CACHE_DIR: z.string().default(".qvac-models"),
+  WEB_URL: z.string().url().optional(),
+  // Optional rate limiting (requests/min per IP, 0 = disabled)
+  RATE_LIMIT_MAX: z.coerce.number().default(60),
+  RATE_LIMIT_WINDOW_MS: z.coerce.number().default(60_000),
 });
 
 export type Env = z.infer<typeof envSchema>;
