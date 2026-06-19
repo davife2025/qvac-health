@@ -5,6 +5,7 @@ import { validateEnv } from "./config/env.js";
 import { healthRoutes } from "./routes/health.js";
 import { aiRoutes } from "./routes/ai.js";
 import { modelRoutes } from "./routes/models.js";
+import { journalRoutes } from "./routes/journal.js";
 import { modelManager, closeWorkspace, RAG_WORKSPACES } from "@qvac-health/qvac-core";
 
 const env = validateEnv();
@@ -31,10 +32,10 @@ await app.register(cors, {
 
 await app.register(sensible);
 
-// Pass env to routes that need it for auth
 await app.register(healthRoutes);
 await app.register(modelRoutes);
 await app.register(aiRoutes, { env });
+await app.register(journalRoutes, { env });
 
 const shutdown = async (signal: string) => {
   app.log.info(`Received ${signal}, shutting down...`);
