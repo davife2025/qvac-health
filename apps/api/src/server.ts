@@ -6,6 +6,7 @@ import { healthRoutes } from "./routes/health.js";
 import { aiRoutes } from "./routes/ai.js";
 import { modelRoutes } from "./routes/models.js";
 import { journalRoutes } from "./routes/journal.js";
+import { soapRoutes } from "./routes/soap.js";
 import { modelManager, closeWorkspace, RAG_WORKSPACES } from "@qvac-health/qvac-core";
 
 const env = validateEnv();
@@ -36,6 +37,7 @@ await app.register(healthRoutes);
 await app.register(modelRoutes);
 await app.register(aiRoutes, { env });
 await app.register(journalRoutes, { env });
+await app.register(soapRoutes, { env });
 
 const shutdown = async (signal: string) => {
   app.log.info(`Received ${signal}, shutting down...`);
