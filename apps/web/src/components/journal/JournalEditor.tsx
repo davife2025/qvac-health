@@ -4,7 +4,9 @@ import { useState } from "react";
 import { MoodPicker } from "./MoodPicker";
 import { TagInput } from "./TagInput";
 import { AIResponsePanel } from "./AIResponsePanel";
+import { RelatedEntries } from "./RelatedEntries";
 import { useCompanionStream } from "@/hooks/useCompanionStream";
+import { useJournalRAG } from "@/hooks/useRAG";
 import type { MoodLevel } from "@qvac-health/types";
 import type { LocalEntry } from "@/hooks/useJournal";
 
@@ -19,6 +21,8 @@ export function JournalEditor({ onSave, onAIResponse }: JournalEditorProps) {
   const [tags, setTags] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
   const [savedEntry, setSavedEntry] = useState<LocalEntry | null>(null);
+
+  const { ingest } = useJournalRAG();
 
   const companion = useCompanionStream({
     onDone: async (fullText) => {
@@ -36,10 +40,18 @@ export function JournalEditor({ onSave, onAIResponse }: JournalEditorProps) {
       const entry = await onSave(content.trim(), mood, tags);
       setSavedEntry(entry);
 
-      // Immediately kick off companion stream
+      // Ingest into local RAG vector store (fire-and-forget, non-blocking)
+      ingest({
+        entryId: entry.id,
+        content: content.trim(),
+        mood,
+        tags,
+        createdAt: entry.createdAt,
+      });
+
+      // Stream companion response
       await companion.stream(content.trim());
 
-      // Reset form for next entry
       setContent("");
       setMood(3);
       setTags([]);
@@ -51,8 +63,8 @@ export function JournalEditor({ onSave, onAIResponse }: JournalEditorProps) {
     }
   };
 
-  const canSave = content.trim().length > 0 && !saving && !companion.streaming;
-  const charCount = content.length;
+  const busy = saving || companion.streaming;
+  const canSave = content.trim().length > 0 && !busy;
   const charLimit = 5000;
 
   return (
@@ -60,14 +72,12 @@ export function JournalEditor({ onSave, onAIResponse }: JournalEditorProps) {
       <div className="flex items-center justify-between">
         <h2 className="font-semibold text-gray-900">New Entry</h2>
         <span className="text-xs text-gray-300 tabular-nums">
-          {charCount}/{charLimit}
+          {content.length}/{charLimit}
         </span>
       </div>
 
-      {/* Mood */}
-      <MoodPicker value={mood} onChange={setMood} disabled={saving || companion.streaming} />
+      <MoodPicker value={mood} onChange={setMood} disabled={busy} />
 
-      {/* Text area */}
       <div className="space-y-1.5">
         <label className="block text-sm font-medium text-gray-700">
           What&apos;s on your mind?
@@ -75,21 +85,18 @@ export function JournalEditor({ onSave, onAIResponse }: JournalEditorProps) {
         <textarea
           value={content}
           onChange={(e) => setContent(e.target.value.slice(0, charLimit))}
-          disabled={saving || companion.streaming}
+          disabled={busy}
           rows={6}
           placeholder="Write freely. This stays on your device…"
           className="textarea w-full"
         />
       </div>
 
-      {/* Tags */}
-      <TagInput
-        tags={tags}
-        onChange={setTags}
-        disabled={saving || companion.streaming}
-      />
+      {/* Related past entries — surfaces as user types */}
+      <RelatedEntries currentText={content} />
 
-      {/* AI response streaming panel */}
+      <TagInput tags={tags} onChange={setTags} disabled={busy} />
+
       <AIResponsePanel
         streaming={companion.streaming}
         text={companion.text}
@@ -97,16 +104,15 @@ export function JournalEditor({ onSave, onAIResponse }: JournalEditorProps) {
         onRetry={savedEntry ? () => companion.stream(savedEntry.content) : undefined}
       />
 
-      {/* Actions */}
       <div className="flex items-center gap-3 pt-1">
-        <button
-          onClick={handleSave}
-          disabled={!canSave}
-          className="btn-primary"
-        >
-          {saving ? "Saving…" : companion.streaming ? "Getting reflection…" : "Save & reflect"}
+        <button onClick={handleSave} disabled={!canSave} className="btn-primary">
+          {saving
+            ? "Saving…"
+            : companion.streaming
+            ? "Getting reflection…"
+            : "Save & reflect"}
         </button>
-        {content.length > 0 && !saving && !companion.streaming && (
+        {content.length > 0 && !busy && (
           <button
             onClick={() => { setContent(""); setTags([]); setMood(3); }}
             className="text-sm text-gray-400 hover:text-gray-600"
@@ -114,9 +120,7 @@ export function JournalEditor({ onSave, onAIResponse }: JournalEditorProps) {
             Clear
           </button>
         )}
-        <p className="ml-auto text-xs text-gray-300">
-          🔒 Stays on your device
-        </p>
+        <p className="ml-auto text-xs text-gray-300">🔒 Stays on your device</p>
       </div>
     </div>
   );
