@@ -1,7 +1,3 @@
-/**
- * QVAC Health — API Server (S2: real QVAC wiring)
- */
-
 import Fastify from "fastify";
 import cors from "@fastify/cors";
 import sensible from "@fastify/sensible";
@@ -23,8 +19,6 @@ const app = Fastify({
   },
 });
 
-// ─── Plugins ──────────────────────────────────────────────────────────────────
-
 await app.register(cors, {
   origin:
     env.NODE_ENV === "development"
@@ -37,24 +31,18 @@ await app.register(cors, {
 
 await app.register(sensible);
 
-// ─── Routes ───────────────────────────────────────────────────────────────────
-
+// Pass env to routes that need it for auth
 await app.register(healthRoutes);
-await app.register(aiRoutes);
 await app.register(modelRoutes);
-
-// ─── Graceful shutdown ────────────────────────────────────────────────────────
+await app.register(aiRoutes, { env });
 
 const shutdown = async (signal: string) => {
   app.log.info(`Received ${signal}, shutting down...`);
   try {
-    // Close RAG workspaces to release file locks
     await closeWorkspace(RAG_WORKSPACES.JOURNAL).catch(() => {});
     await closeWorkspace(RAG_WORKSPACES.SOAP).catch(() => {});
-    // Unload all models to free native memory
     await modelManager.unloadAll();
     await app.close();
-    app.log.info("✅ Server closed cleanly");
     process.exit(0);
   } catch (err) {
     app.log.error(err, "Error during shutdown");
@@ -65,13 +53,9 @@ const shutdown = async (signal: string) => {
 process.on("SIGINT", () => shutdown("SIGINT"));
 process.on("SIGTERM", () => shutdown("SIGTERM"));
 
-// ─── Start ────────────────────────────────────────────────────────────────────
-
 try {
   await app.listen({ port: env.API_PORT, host: env.API_HOST });
-  app.log.info(`🚀 API running on http://${env.API_HOST}:${env.API_PORT}`);
-  app.log.info(`🧠 QVAC SDK ready — models lazy-load on first request`);
-  app.log.info(`   Pre-load via: POST /models/load { "key": "COMPANION_LLM" }`);
+  app.log.info(`🚀 QVAC Health API → http://${env.API_HOST}:${env.API_PORT}`);
 } catch (err) {
   app.log.error(err);
   process.exit(1);
