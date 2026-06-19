@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { MoodBadge } from "./MoodPicker";
 import type { LocalEntry } from "@/hooks/useJournal";
 
@@ -26,24 +26,29 @@ export function JournalEntryCard({ entry, onDelete }: JournalEntryCardProps) {
   const preview = entry.content.slice(0, 200);
   const hasMore = entry.content.length > 200;
 
+  // Fix #19: auto-reset confirmation after 4s if user doesn't confirm
+  useEffect(() => {
+    if (!confirmDelete) return;
+    const t = setTimeout(() => setConfirmDelete(false), 4000);
+    return () => clearTimeout(t);
+  }, [confirmDelete]);
+
   return (
     <div className="card space-y-3 group">
-      {/* Header */}
       <div className="flex items-start justify-between gap-2">
         <div className="space-y-1">
           <p className="text-xs text-gray-400">{formatDate(entry.createdAt)}</p>
           <MoodBadge mood={entry.mood} />
         </div>
 
-        {/* Delete */}
-        <div className="opacity-0 group-hover:opacity-100 transition-opacity flex gap-2">
+        <div className="opacity-0 group-hover:opacity-100 transition-opacity flex gap-2 items-center">
           {confirmDelete ? (
             <>
               <button
                 onClick={() => onDelete(entry.id)}
                 className="text-xs text-red-500 hover:text-red-700 font-medium"
               >
-                Confirm
+                Confirm delete
               </button>
               <button
                 onClick={() => setConfirmDelete(false)}
@@ -63,39 +68,31 @@ export function JournalEntryCard({ entry, onDelete }: JournalEntryCardProps) {
         </div>
       </div>
 
-      {/* Tags */}
       {entry.tags.length > 0 && (
         <div className="flex flex-wrap gap-1">
           {entry.tags.map((tag) => (
-            <span
-              key={tag}
-              className="rounded-full bg-gray-100 px-2 py-0.5 text-xs text-gray-500"
-            >
+            <span key={tag}
+              className="rounded-full bg-gray-100 px-2 py-0.5 text-xs text-gray-500">
               #{tag}
             </span>
           ))}
         </div>
       )}
 
-      {/* Content */}
       {entry.content ? (
         <div>
           <p className="text-sm text-gray-700 leading-relaxed whitespace-pre-wrap">
             {expanded ? entry.content : preview}
             {!expanded && hasMore && (
-              <button
-                onClick={() => setExpanded(true)}
-                className="ml-1 text-calm-500 hover:text-calm-700 text-xs"
-              >
+              <button onClick={() => setExpanded(true)}
+                className="ml-1 text-calm-500 hover:text-calm-700 text-xs">
                 …read more
               </button>
             )}
           </p>
           {expanded && hasMore && (
-            <button
-              onClick={() => setExpanded(false)}
-              className="mt-1 text-xs text-gray-400 hover:text-gray-600"
-            >
+            <button onClick={() => setExpanded(false)}
+              className="mt-1 text-xs text-gray-400 hover:text-gray-600">
               Show less
             </button>
           )}
@@ -106,7 +103,6 @@ export function JournalEntryCard({ entry, onDelete }: JournalEntryCardProps) {
         </p>
       )}
 
-      {/* AI Response */}
       {entry.aiResponse && (
         <div className="rounded-xl bg-calm-50 px-4 py-3 space-y-1">
           <p className="text-[10px] font-semibold text-calm-600 uppercase tracking-wide">

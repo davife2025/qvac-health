@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useJournal } from "@/hooks/useJournal";
+import { useRAGBackfill } from "@/hooks/useRAGBackfill";
 import { JournalEditor } from "./JournalEditor";
 import { JournalEntryCard } from "./JournalEntryCard";
 import { MoodSparkline } from "./MoodSparkline";
@@ -12,12 +13,23 @@ interface JournalViewProps {
 }
 
 export function JournalView({ userId }: JournalViewProps) {
-  const { entries, loading, error, saveEntry, attachAIResponse, deleteEntry } =
-    useJournal(userId);
+  const {
+    entries,
+    loading,
+    error,
+    hasMore,
+    loadMore,
+    saveEntry,
+    attachAIResponse,
+    deleteEntry,
+  } = useJournal(userId);
 
   const [companionReady, setCompanionReady] = useState(false);
   const [embeddingsReady, setEmbeddingsReady] = useState(false);
   const [search, setSearch] = useState("");
+
+  // Fix #11: backfill existing entries into vector store on first load
+  useRAGBackfill(entries, embeddingsReady, userId);
 
   const filtered = search.trim()
     ? entries.filter(
@@ -38,7 +50,7 @@ export function JournalView({ userId }: JournalViewProps) {
 
       {entries.length >= 2 && <MoodSparkline entries={entries} />}
 
-      {/* Step 1: load companion LLM */}
+      {/* Step 1: companion LLM */}
       {!companionReady && (
         <ModelLoader
           modelKey="COMPANION_LLM"
@@ -46,7 +58,7 @@ export function JournalView({ userId }: JournalViewProps) {
         />
       )}
 
-      {/* Step 2: load embeddings for RAG (non-blocking — user can write while this loads) */}
+      {/* Step 2: embeddings for RAG — non-blocking */}
       {companionReady && !embeddingsReady && (
         <div className="space-y-1">
           <p className="text-xs text-gray-400">
@@ -59,7 +71,6 @@ export function JournalView({ userId }: JournalViewProps) {
         </div>
       )}
 
-      {/* Editor shows as soon as companion is ready */}
       {companionReady && (
         <JournalEditor onSave={saveEntry} onAIResponse={attachAIResponse} />
       )}
@@ -77,10 +88,18 @@ export function JournalView({ userId }: JournalViewProps) {
             <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-300 text-sm">
               🔍
             </span>
+            {search && (
+              <button
+                onClick={() => setSearch("")}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-300 hover:text-gray-500 text-sm"
+              >
+                ✕
+              </button>
+            )}
           </div>
         )}
 
-        {loading && (
+        {loading && entries.length === 0 && (
           <div className="text-center py-12 text-gray-400 text-sm">
             Loading your journal…
           </div>
@@ -93,10 +112,10 @@ export function JournalView({ userId }: JournalViewProps) {
         )}
 
         {!loading && entries.length === 0 && (
-          <div className="card text-center py-16 text-gray-400 space-y-2">
+          <div className="rounded-2xl bg-white p-6 shadow-sm ring-1 ring-gray-100 text-center py-16 space-y-2">
             <p className="text-4xl">🌱</p>
-            <p className="font-medium text-gray-500">Your journal is empty</p>
-            <p className="text-sm">
+            <p className="font-semibold text-gray-500">Your journal is empty</p>
+            <p className="text-sm text-gray-400">
               {companionReady
                 ? "Write your first entry above."
                 : "Load the AI model above to get started."}
@@ -117,6 +136,19 @@ export function JournalView({ userId }: JournalViewProps) {
             onDelete={deleteEntry}
           />
         ))}
+
+        {/* Fix #14: load more pagination */}
+        {hasMore && !search && (
+          <div className="text-center pt-2">
+            <button
+              onClick={loadMore}
+              disabled={loading}
+              className="btn-secondary text-sm"
+            >
+              {loading ? "Loading…" : "Load older entries"}
+            </button>
+          </div>
+        )}
       </section>
     </main>
   );

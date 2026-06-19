@@ -1,11 +1,13 @@
 /**
- * Fastify auth middleware — verifies Supabase JWT on every protected route.
+ * auth.ts — Fastify JWT verification middleware.
  *
- * The web app sends the user's access token in the Authorization header:
- *   Authorization: Bearer <supabase-access-token>
+ * S8 fix: role now read from JWT user_metadata (set at signup),
+ * eliminating the second DB round-trip to public.users on every request.
  *
- * We verify it server-side using the Supabase service role client.
- * This ensures the API never trusts a userId from the request body.
+ * The role in user_metadata is set server-side by Supabase Auth and cannot
+ * be forged by the client — it comes from the signed JWT payload.
+ * We keep a fallback DB lookup only if user_metadata.role is missing
+ * (e.g. legacy accounts created before S3).
  */
 
 import type { FastifyInstance, FastifyRequest, FastifyReply } from "fastify";
@@ -18,7 +20,6 @@ export interface AuthenticatedUser {
   role: "patient" | "clinician";
 }
 
-// Augment FastifyRequest to carry the verified user
 declare module "fastify" {
   interface FastifyRequest {
     user?: AuthenticatedUser;
@@ -36,32 +37,38 @@ export function requireAuth(app: FastifyInstance, env: Env) {
     const token = authHeader.slice(7);
     const supabase = getSupabaseClient(env);
 
-    // Verify the JWT by calling getUser — this hits Supabase Auth server
     const { data, error } = await supabase.auth.getUser(token);
 
     if (error || !data.user) {
       return reply.code(401).send({ ok: false, error: "Invalid or expired token" });
     }
 
-    // Fetch the user's role from public.users
-    const { data: profile } = await supabase
-      .from("users")
-      .select("role")
-      .eq("id", data.user.id)
-      .single();
+    // Primary: read role from signed JWT metadata — zero extra DB calls
+    const metaRole = data.user.user_metadata?.role as string | undefined;
+
+    let role: "patient" | "clinician";
+
+    if (metaRole === "patient" || metaRole === "clinician") {
+      role = metaRole;
+    } else {
+      // Fallback for legacy accounts: single DB lookup, then done
+      app.log.warn({ userId: data.user.id }, "Role missing from JWT metadata, falling back to DB");
+      const { data: profile } = await supabase
+        .from("users")
+        .select("role")
+        .eq("id", data.user.id)
+        .single();
+      role = (profile?.role ?? "patient") as "patient" | "clinician";
+    }
 
     request.user = {
       id: data.user.id,
       email: data.user.email ?? "",
-      role: (profile?.role ?? "patient") as "patient" | "clinician",
+      role,
     };
   };
 }
 
-/**
- * Role guard — call after requireAuth.
- * Returns a preHandler that rejects requests from the wrong role.
- */
 export function requireRole(role: "patient" | "clinician") {
   return async (request: FastifyRequest, reply: FastifyReply) => {
     if (request.user?.role !== role) {

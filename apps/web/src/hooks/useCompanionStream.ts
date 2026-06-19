@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useRef } from "react";
+import { useState, useCallback, useRef, useEffect } from "react";
 import { createClient } from "@/lib/supabase/client";
 
 interface UseCompanionStreamOptions {
@@ -15,81 +15,95 @@ export function useCompanionStream(options: UseCompanionStreamOptions = {}) {
   const [error, setError] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
 
-  const stream = useCallback(
-    async (journalText: string) => {
-      // Cancel any in-flight stream
-      abortRef.current?.abort();
-      const abort = new AbortController();
-      abortRef.current = abort;
+  // Fix #2: store callbacks in refs so useCallback doesn't depend on options object.
+  // This prevents stream() from being recreated every render when the parent
+  // passes an inline object literal as options.
+  const onTokenRef = useRef(options.onToken);
+  const onDoneRef = useRef(options.onDone);
+  const onErrorRef = useRef(options.onError);
 
-      setStreaming(true);
-      setText("");
-      setError(null);
+  useEffect(() => {
+    onTokenRef.current = options.onToken;
+    onDoneRef.current = options.onDone;
+    onErrorRef.current = options.onError;
+  });
 
-      try {
-        const supabase = createClient();
-        const { data: { session } } = await supabase.auth.getSession();
-        if (!session) throw new Error("Not authenticated");
+  // Memoised client — fix #1 pattern applied here too
+  const supabase = useRef(createClient()).current;
 
-        const res = await fetch("/api/ai/companion", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${session.access_token}`,
-          },
-          body: JSON.stringify({ text: journalText }),
-          signal: abort.signal,
-        });
+  const stream = useCallback(async (journalText: string) => {
+    abortRef.current?.abort();
+    const abort = new AbortController();
+    abortRef.current = abort;
 
-        if (!res.ok || !res.body) {
-          throw new Error(`HTTP ${res.status}`);
-        }
+    setStreaming(true);
+    setText("");
+    setError(null);
 
-        const reader = res.body.getReader();
-        const decoder = new TextDecoder();
-        let buffer = "";
-        let full = "";
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) throw new Error("Not authenticated");
 
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
+      const res = await fetch("/api/ai/companion", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${session.access_token}`,
+        },
+        body: JSON.stringify({ text: journalText }),
+        signal: abort.signal,
+      });
 
-          buffer += decoder.decode(value, { stream: true });
-          const lines = buffer.split("\n\n");
-          buffer = lines.pop() ?? "";
+      if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
 
-          for (const line of lines) {
-            if (!line.startsWith("data: ")) continue;
-            const event = JSON.parse(line.slice(6));
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let full = "";
 
-            if (event.token) {
-              full += event.token;
-              setText(full);
-              options.onToken?.(event.token);
-            } else if (event.done) {
-              options.onDone?.(full);
-              return;
-            } else if (event.error) {
-              throw new Error(event.error);
-            }
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n\n");
+        buffer = lines.pop() ?? "";
+
+        for (const line of lines) {
+          if (!line.startsWith("data: ")) continue;
+          const event = JSON.parse(line.slice(6));
+
+          if (event.token) {
+            full += event.token;
+            setText(full);
+            onTokenRef.current?.(event.token);
+          } else if (event.done) {
+            onDoneRef.current?.(full);
+            return;
+          } else if (event.error) {
+            throw new Error(event.error);
           }
         }
-      } catch (err) {
-        if (err instanceof Error && err.name === "AbortError") return;
-        const msg = err instanceof Error ? err.message : "Stream failed";
-        setError(msg);
-        options.onError?.(msg);
-      } finally {
-        setStreaming(false);
       }
-    },
-    [options]
-  );
+    } catch (err) {
+      if (err instanceof Error && err.name === "AbortError") return;
+      const msg = err instanceof Error ? err.message : "Stream failed";
+      setError(msg);
+      onErrorRef.current?.(msg);
+    } finally {
+      setStreaming(false);
+    }
+  }, []); // stable — no deps needed, all callbacks via refs
 
   const cancel = useCallback(() => {
     abortRef.current?.abort();
     setStreaming(false);
   }, []);
 
-  return { stream, cancel, streaming, text, error };
+  const reset = useCallback(() => {
+    setText("");
+    setError(null);
+  }, []);
+
+  return { stream, cancel, reset, streaming, text, error };
 }

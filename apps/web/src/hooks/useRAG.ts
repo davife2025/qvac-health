@@ -1,16 +1,10 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { useCallback, useState, useRef } from "react";
 import { createClient } from "@/lib/supabase/client";
 import type { RAGSearchResult } from "@qvac-health/types";
 
 export type { RAGSearchResult };
-
-async function getToken() {
-  const supabase = createClient();
-  const { data: { session } } = await supabase.auth.getSession();
-  return session?.access_token ?? null;
-}
 
 // ─── Journal RAG ─────────────────────────────────────────────────────────────
 
@@ -19,10 +13,14 @@ export function useJournalRAG() {
   const [results, setResults] = useState<RAGSearchResult[]>([]);
   const [error, setError] = useState<string | null>(null);
 
-  /**
-   * Ingest a journal entry into the local vector store.
-   * Call after saveEntry() in useJournal.
-   */
+  // Fix #17: stable client ref — not recreated on every getToken() call
+  const supabase = useRef(createClient()).current;
+
+  const getToken = useCallback(async () => {
+    const { data: { session } } = await supabase.auth.getSession();
+    return session?.access_token ?? null;
+  }, [supabase]);
+
   const ingest = useCallback(async (params: {
     entryId: string;
     content: string;
@@ -42,16 +40,11 @@ export function useJournalRAG() {
         },
         body: JSON.stringify(params),
       });
-      // Fire-and-forget — ingest errors don't block the user
     } catch (err) {
       console.warn("[RAG] Journal ingest failed (non-blocking):", err);
     }
-  }, []);
+  }, [getToken]);
 
-  /**
-   * Search journal entries semantically.
-   * Used to surface "related past entries" while writing.
-   */
   const search = useCallback(async (query: string, topK = 4) => {
     if (!query.trim()) {
       setResults([]);
@@ -90,7 +83,7 @@ export function useJournalRAG() {
     } finally {
       setSearching(false);
     }
-  }, []);
+  }, [getToken]);
 
   const clear = useCallback(() => {
     setResults([]);
@@ -107,10 +100,13 @@ export function useSOAPRAG() {
   const [results, setResults] = useState<RAGSearchResult[]>([]);
   const [error, setError] = useState<string | null>(null);
 
-  /**
-   * Ingest a SOAP note. Call after generation completes in useSOAP.
-   * We embed the concatenated SOAP fields — not the raw session notes.
-   */
+  const supabase = useRef(createClient()).current;
+
+  const getToken = useCallback(async () => {
+    const { data: { session } } = await supabase.auth.getSession();
+    return session?.access_token ?? null;
+  }, [supabase]);
+
   const ingest = useCallback(async (params: {
     noteId: string;
     patientRef: string;
@@ -144,12 +140,8 @@ export function useSOAPRAG() {
     } catch (err) {
       console.warn("[RAG] SOAP ingest failed (non-blocking):", err);
     }
-  }, []);
+  }, [getToken]);
 
-  /**
-   * Search SOAP notes by clinical concept.
-   * Optionally scoped to a specific patient reference.
-   */
   const search = useCallback(async (
     query: string,
     options: { patientRef?: string; topK?: number } = {}
@@ -195,7 +187,7 @@ export function useSOAPRAG() {
     } finally {
       setSearching(false);
     }
-  }, []);
+  }, [getToken]);
 
   const clear = useCallback(() => {
     setResults([]);

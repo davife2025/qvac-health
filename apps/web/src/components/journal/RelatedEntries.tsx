@@ -5,9 +5,7 @@ import { useJournalRAG } from "@/hooks/useRAG";
 
 interface RelatedEntriesProps {
   currentText: string;
-  /** minimum chars before triggering a search */
   minChars?: number;
-  /** debounce ms */
   debounceMs?: number;
 }
 
@@ -29,17 +27,18 @@ export function RelatedEntries({
   const lastQueryRef = useRef<string>("");
 
   useEffect(() => {
-    // Strip metadata prefix lines the API adds to stored docs
-    const stripped = currentText.replace(/\[Journal entry.*?\]\n.*?\n/g, "").trim();
+    // Fix #6: removed dead metadata-strip regex — currentText is raw user input,
+    // never contains the server-side metadata prefix.
+    const trimmed = currentText.trim();
 
-    if (stripped.length < minChars) {
+    if (trimmed.length < minChars) {
       clear();
       lastQueryRef.current = "";
       return;
     }
 
-    // Use the last 200 chars as the semantic query — most relevant context
-    const query = stripped.slice(-200);
+    // Use last 200 chars as the semantic query — most contextually relevant
+    const query = trimmed.slice(-200);
     if (query === lastQueryRef.current) return;
 
     if (timerRef.current) clearTimeout(timerRef.current);
@@ -58,9 +57,7 @@ export function RelatedEntries({
   return (
     <div className="space-y-2">
       <div className="flex items-center gap-2">
-        <p className="text-xs font-semibold text-gray-500">
-          Related past entries
-        </p>
+        <p className="text-xs font-semibold text-gray-500">Related past entries</p>
         {searching && (
           <span className="text-[10px] text-gray-300 animate-pulse">
             searching memory…
@@ -73,18 +70,15 @@ export function RelatedEntries({
 
       <div className="space-y-2">
         {results.map((r, i) => {
-          // Extract the entry content below the metadata header
+          // Strip the metadata header added by the ingest route
+          // Format: "[Journal entry <uuid>]\nDate: ...\nMood: ...\n\n<content>"
           const contentStart = r.content.indexOf("\n\n");
           const display =
-            contentStart > -1
-              ? r.content.slice(contentStart + 2)
-              : r.content;
+            contentStart > -1 ? r.content.slice(contentStart + 2) : r.content;
 
           return (
-            <div
-              key={i}
-              className="rounded-xl bg-gray-50 px-3 py-2.5 ring-1 ring-gray-100 space-y-1"
-            >
+            <div key={i}
+              className="rounded-xl bg-gray-50 px-3 py-2.5 ring-1 ring-gray-100 space-y-1">
               <div className="flex items-center justify-between">
                 <p className="text-[10px] font-medium text-gray-400 uppercase tracking-wide">
                   Past entry

@@ -1,5 +1,6 @@
 "use client";
 
+import { useId } from "react";
 import type { MoodLevel } from "@qvac-health/types";
 
 interface MoodSparklineProps {
@@ -15,8 +16,10 @@ const MOOD_COLORS: Record<MoodLevel, string> = {
 };
 
 export function MoodSparkline({ entries }: MoodSparklineProps) {
-  const recent = entries.slice(0, 30).reverse();
+  // Fix #9: useId ensures gradient ID is unique per instance — no SVG ID collision
+  const gradientId = useId().replace(/:/g, "-");
 
+  const recent = entries.slice(0, 30).reverse();
   if (recent.length < 2) return null;
 
   const W = 280;
@@ -47,62 +50,42 @@ export function MoodSparkline({ entries }: MoodSparklineProps) {
     <div className="card space-y-2">
       <div className="flex items-center justify-between">
         <p className="text-xs font-semibold text-gray-700">Mood trend</p>
-        <span className="text-xs text-gray-400">{avgLabel} · last {recent.length} entries</span>
+        <span className="text-xs text-gray-400">
+          {avgLabel} · last {recent.length} entries
+        </span>
       </div>
 
       <svg viewBox={`0 0 ${W} ${H}`} className="w-full" style={{ height: H }}>
-        {/* Grid lines */}
         {[1, 2, 3, 4, 5].map((level) => {
           const y = PAD + ((5 - level) / 4) * usableH;
           return (
-            <line
-              key={level}
-              x1={PAD} y1={y} x2={W - PAD} y2={y}
-              stroke="#f3f4f6"
-              strokeWidth="1"
-            />
+            <line key={level} x1={PAD} y1={y} x2={W - PAD} y2={y}
+              stroke="#f3f4f6" strokeWidth="1" />
           );
         })}
 
-        {/* Gradient fill */}
         <defs>
-          <linearGradient id="moodGrad" x1="0" y1="0" x2="0" y2="1">
+          <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
             <stop offset="0%" stopColor="#0d7fe8" stopOpacity="0.15" />
             <stop offset="100%" stopColor="#0d7fe8" stopOpacity="0" />
           </linearGradient>
         </defs>
 
-        {/* Area fill */}
         <path
           d={`${pathD} L ${points[points.length - 1].x} ${H} L ${points[0].x} ${H} Z`}
-          fill="url(#moodGrad)"
+          fill={`url(#${gradientId})`}
         />
 
-        {/* Line */}
-        <path
-          d={pathD}
-          fill="none"
-          stroke="#0d7fe8"
-          strokeWidth="2"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        />
+        <path d={pathD} fill="none" stroke="#0d7fe8"
+          strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
 
-        {/* Dots — only last 8 to avoid crowding */}
         {points.slice(-8).map((p, i) => (
-          <circle
-            key={i}
-            cx={p.x}
-            cy={p.y}
-            r={3}
+          <circle key={i} cx={p.x} cy={p.y} r={3}
             fill={MOOD_COLORS[p.mood as MoodLevel]}
-            stroke="white"
-            strokeWidth="1.5"
-          />
+            stroke="white" strokeWidth="1.5" />
         ))}
       </svg>
 
-      {/* Mood scale labels */}
       <div className="flex justify-between text-[10px] text-gray-300 px-1">
         <span>😔</span>
         <span>😐</span>

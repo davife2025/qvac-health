@@ -1,13 +1,13 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import {
   saveContent,
   getContent,
   getAllContent,
   deleteContent,
-  hashContent,
 } from "@/lib/local-journal-store";
+import { hashContent } from "@/lib/local-db";
 import { createClient } from "@/lib/supabase/client";
 import type { MoodLevel } from "@qvac-health/types";
 
@@ -31,32 +31,40 @@ interface MetadataRow {
   updated_at: string;
 }
 
+const PAGE_SIZE = 50;
+
 export function useJournal(userId: string) {
   const [entries, setEntries] = useState<LocalEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [hasMore, setHasMore] = useState(false);
+  const [page, setPage] = useState(0);
 
-  const supabase = createClient();
+  // Fix #1: memoised client — never recreated across renders
+  const supabase = useMemo(() => createClient(), []);
 
-  /** Merge Supabase metadata rows with IndexedDB content */
-  const loadEntries = useCallback(async () => {
+  // Fix #7: save race guard
+  const savingRef = useRef(false);
+
+  const loadEntries = useCallback(async (pageIndex = 0) => {
     setLoading(true);
     setError(null);
     try {
-      // Fetch metadata from Supabase
+      const from = pageIndex * PAGE_SIZE;
+      const to = from + PAGE_SIZE - 1;
+
       const { data: rows, error: sbErr } = await supabase
         .from("journal_entries")
         .select("id, mood, tags, content_hash, created_at, updated_at")
         .eq("user_id", userId)
-        .order("created_at", { ascending: false });
+        .order("created_at", { ascending: false })
+        .range(from, to);
 
       if (sbErr) throw sbErr;
 
-      // Fetch all local content
       const allLocal = await getAllContent();
       const localMap = new Map(allLocal.map((l) => [l.id, l]));
 
-      // Merge
       const merged: LocalEntry[] = (rows ?? []).map((row: MetadataRow) => {
         const local = localMap.get(row.id);
         return {
@@ -71,77 +79,76 @@ export function useJournal(userId: string) {
         };
       });
 
-      setEntries(merged);
+      setEntries((prev) =>
+        pageIndex === 0 ? merged : [...prev, ...merged]
+      );
+      setHasMore((rows ?? []).length === PAGE_SIZE);
+      setPage(pageIndex);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load entries");
     } finally {
       setLoading(false);
     }
-  }, [userId]);
+  }, [userId, supabase]);
 
   useEffect(() => {
-    loadEntries();
+    loadEntries(0);
   }, [loadEntries]);
 
-  /**
-   * Save a new journal entry:
-   * 1. Hash content
-   * 2. POST metadata to API → get UUID back
-   * 3. Save content + UUID to IndexedDB
-   * 4. Update local state
-   */
+  const loadMore = useCallback(() => {
+    if (!loading && hasMore) loadEntries(page + 1);
+  }, [loading, hasMore, page, loadEntries]);
+
   const saveEntry = useCallback(
     async (content: string, mood: MoodLevel, tags: string[]) => {
-      const contentHash = await hashContent(content);
+      // Fix #7: prevent concurrent saves
+      if (savingRef.current) throw new Error("Save already in progress");
+      savingRef.current = true;
 
-      // Get auth session for API call
-      const { data: { session } } = await supabase.auth.getSession();
-      const token = session?.access_token;
-      if (!token) throw new Error("Not authenticated");
+      try {
+        const contentHash = await hashContent(content);
 
-      const res = await fetch("/api/journal/entries", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({ contentHash, mood, tags }),
-      });
+        const { data: { session } } = await supabase.auth.getSession();
+        const token = session?.access_token;
+        if (!token) throw new Error("Not authenticated");
 
-      if (!res.ok) throw new Error("Failed to save metadata");
-      const { data: row } = await res.json();
+        const res = await fetch("/api/journal/entries", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({ contentHash, mood, tags }),
+        });
 
-      // Save content locally
-      await saveContent({
-        id: row.id,
-        content,
-        savedAt: Date.now(),
-      });
+        if (!res.ok) throw new Error("Failed to save metadata");
+        const { data: row } = await res.json();
 
-      const newEntry: LocalEntry = {
-        id: row.id,
-        content,
-        mood,
-        tags,
-        contentHash,
-        createdAt: row.created_at,
-        updatedAt: row.updated_at,
-      };
+        await saveContent({ id: row.id, content, savedAt: Date.now() });
 
-      setEntries((prev) => [newEntry, ...prev]);
-      return newEntry;
+        const newEntry: LocalEntry = {
+          id: row.id,
+          content,
+          mood,
+          tags,
+          contentHash,
+          createdAt: row.created_at,
+          updatedAt: row.updated_at,
+        };
+
+        setEntries((prev) => [newEntry, ...prev]);
+        return newEntry;
+      } finally {
+        savingRef.current = false;
+      }
     },
-    [userId]
+    [supabase]
   );
 
-  /**
-   * Attach AI response to an existing entry (local only — stays on device)
-   */
   const attachAIResponse = useCallback(
     async (id: string, aiResponse: string) => {
       const local = await getContent(id);
       if (!local) return;
-
       await saveContent({ ...local, aiResponse });
       setEntries((prev) =>
         prev.map((e) => (e.id === id ? { ...e, aiResponse } : e))
@@ -150,7 +157,6 @@ export function useJournal(userId: string) {
     []
   );
 
-  /** Delete entry from both Supabase metadata and IndexedDB */
   const deleteEntry = useCallback(
     async (id: string) => {
       const { data: { session } } = await supabase.auth.getSession();
@@ -165,16 +171,18 @@ export function useJournal(userId: string) {
       await deleteContent(id);
       setEntries((prev) => prev.filter((e) => e.id !== id));
     },
-    []
+    [supabase]
   );
 
   return {
     entries,
     loading,
     error,
+    hasMore,
+    loadMore,
     saveEntry,
     attachAIResponse,
     deleteEntry,
-    refresh: loadEntries,
+    refresh: () => loadEntries(0),
   };
 }
