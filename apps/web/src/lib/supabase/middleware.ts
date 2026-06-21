@@ -1,4 +1,4 @@
-import { createServerClient } from "@supabase/ssr";
+import { createServerClient, type CookieOptions } from "@supabase/ssr";
 import { type NextRequest, NextResponse } from "next/server";
 
 export async function updateSession(request: NextRequest) {
@@ -12,7 +12,17 @@ export async function updateSession(request: NextRequest) {
         getAll() {
           return request.cookies.getAll();
         },
-        setAll(cookiesToSet) {
+        // Fix: explicit type on cookiesToSet — TypeScript's strict mode
+        // (enforced fully in `next build`, more lenient in `next dev`)
+        // requires every parameter to be typed. The array elements match
+        // the shape @supabase/ssr expects: name, value, and cookie options.
+        setAll(
+          cookiesToSet: {
+            name: string;
+            value: string;
+            options: CookieOptions;
+          }[]
+        ) {
           cookiesToSet.forEach(({ name, value }) =>
             request.cookies.set(name, value)
           );
@@ -25,7 +35,7 @@ export async function updateSession(request: NextRequest) {
     }
   );
 
-  // Refresh session — must NOT use getUser() result to gate routes
+  // Refresh session — must NOT use this result alone to gate routes
   // (use getUser() in the guard below for security)
   const {
     data: { user },

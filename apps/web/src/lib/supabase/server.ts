@@ -1,4 +1,4 @@
-import { createServerClient } from "@supabase/ssr";
+import { createServerClient, type CookieOptions } from "@supabase/ssr";
 import { cookies } from "next/headers";
 
 export async function createClient() {
@@ -12,30 +12,27 @@ export async function createClient() {
         getAll() {
           return cookieStore.getAll();
         },
-        setAll(cookiesToSet) {
-          // Fix #11: Server Components cannot set cookies — this is expected
-          // and should be silent. But Server Actions CAN set cookies, and
-          // swallowing their errors would hide real auth failures.
-          //
-          // Next.js sets request.type internally. We detect the context by
-          // checking if cookies().set() throws — in RSC it throws because the
-          // response headers are already sent; in Server Actions it succeeds.
-          // The original blanket try/catch was hiding Server Action failures.
-          //
-          // The @supabase/ssr pattern is: attempt the set, catch the RSC
-          // "Cannot modify headers" error specifically, re-throw everything else.
+        // Explicit type — same fix as middleware.ts, applied preemptively
+        // here since this file has the identical setAll(cookiesToSet) shape.
+        setAll(
+          cookiesToSet: {
+            name: string;
+            value: string;
+            options: CookieOptions;
+          }[]
+        ) {
           try {
             cookiesToSet.forEach(({ name, value, options }) =>
               cookieStore.set(name, value, options)
             );
           } catch (err) {
             // Only swallow the specific Next.js "headers already sent" error
-            // that occurs in Server Components. All other errors propagate.
+            // that occurs in Server Component (RSC) context. All other
+            // errors propagate — Server Actions need to know if this fails.
             if (
               err instanceof Error &&
               err.message.includes("Cannot modify headers")
             ) {
-              // Expected in RSC context — middleware handles session refresh
               return;
             }
             throw err;
