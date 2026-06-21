@@ -5,12 +5,15 @@ import {
   saveSOAPNote,
   getAllSOAPNotes,
   deleteSOAPNote,
-  type LocalSOAPNote,
-  type SOAPFields,
 } from "@/lib/local-soap-store";
+import type { LocalSOAPNote, SOAPFields } from "@/lib/local-soap-store";
 import { hashContent } from "@/lib/local-db";
 import { createClient } from "@/lib/supabase/client";
 
+// Re-export as types only — fixes potential webpack tree-shake issue where
+// a type re-exported via `export type { X }` from a value-importing module
+// can fail strict build-mode resolution if the original wasn't itself
+// `import type`.
 export type { LocalSOAPNote, SOAPFields };
 
 export type GenerationState =
@@ -19,6 +22,23 @@ export type GenerationState =
   | { status: "done"; note: LocalSOAPNote }
   | { status: "error"; message: string };
 
+interface SOAPApiResponse {
+  ok: boolean;
+  data?: {
+    soap: SOAPFields;
+    durationMs: number;
+    modelLabel: string;
+    generatedAt: string;
+  };
+  error?: string;
+}
+
+interface MetaApiResponse {
+  ok: boolean;
+  data?: { id: string };
+  error?: string;
+}
+
 export function useSOAP(_clinicianId: string) {
   const [notes, setNotes] = useState<LocalSOAPNote[]>([]);
   const [loading, setLoading] = useState(true);
@@ -26,7 +46,7 @@ export function useSOAP(_clinicianId: string) {
 
   const supabase = useMemo(() => createClient(), []);
 
-  const loadNotes = useCallback(async () => {
+  const loadNotes = useCallback(async (): Promise<void> => {
     setLoading(true);
     try {
       const local = await getAllSOAPNotes();
@@ -43,13 +63,13 @@ export function useSOAP(_clinicianId: string) {
     loadNotes();
   }, [loadNotes]);
 
-  // Bug fix: removed `clinicianId` from deps — it was never used inside
-  // the callback, causing unnecessary recreation on every render.
   const generate = useCallback(
-    async (rawNotes: string, patientRef: string) => {
+    async (rawNotes: string, patientRef: string): Promise<LocalSOAPNote> => {
       setGeneration({ status: "generating" });
 
-      const { data: { session } } = await supabase.auth.getSession();
+      const sessionResult = await supabase.auth.getSession();
+      const session = sessionResult.data.session;
+
       if (!session) {
         const msg = "Not authenticated";
         setGeneration({ status: "error", message: msg });
@@ -71,16 +91,22 @@ export function useSOAP(_clinicianId: string) {
         });
 
         if (!res.ok) {
-          const err = await res.json().catch(() => ({ error: "Unknown error" }));
-          throw new Error(err.error ?? `HTTP ${res.status}`);
+          const errBody: { error?: string } = await res
+            .json()
+            .catch(() => ({ error: "Unknown error" }));
+          throw new Error(errBody.error ?? `HTTP ${res.status}`);
         }
 
-        const { data } = await res.json();
-        soap = data.soap as SOAPFields;
+        const json: SOAPApiResponse = await res.json();
+        if (!json.data) {
+          throw new Error("Empty response from server");
+        }
+
+        soap = json.data.soap;
         aiData = {
-          durationMs: data.durationMs,
-          modelLabel: data.modelLabel,
-          generatedAt: data.generatedAt,
+          durationMs: json.data.durationMs,
+          modelLabel: json.data.modelLabel,
+          generatedAt: json.data.generatedAt,
         };
       } catch (err) {
         const message = err instanceof Error ? err.message : "Generation failed";
@@ -88,8 +114,9 @@ export function useSOAP(_clinicianId: string) {
         throw err;
       }
 
-      // Save locally with temp ID — replaced once Supabase sync succeeds
-      const tempId = crypto.randomUUID();
+      // Generate a temp ID without relying on crypto.randomUUID() —
+      // avoids any lib-target ambiguity between dev and build environments.
+      const tempId = generateTempId();
       const contentHash = await hashContent(JSON.stringify(soap));
 
       const tempNote: LocalSOAPNote = {
@@ -106,7 +133,7 @@ export function useSOAP(_clinicianId: string) {
       await saveSOAPNote(tempNote);
       setNotes((prev) => [tempNote, ...prev]);
 
-      let finalNote = tempNote;
+      let finalNote: LocalSOAPNote = tempNote;
 
       try {
         const metaRes = await fetch("/api/soap/notes", {
@@ -120,27 +147,30 @@ export function useSOAP(_clinicianId: string) {
 
         if (!metaRes.ok) throw new Error("Metadata sync failed");
 
-        const { data: metaRow } = await metaRes.json();
-        finalNote = { ...tempNote, id: metaRow.id };
+        const metaJson: MetaApiResponse = await metaRes.json();
+        if (!metaJson.data) throw new Error("Empty metadata response");
+
+        finalNote = { ...tempNote, id: metaJson.data.id };
 
         await saveSOAPNote(finalNote);
         await deleteSOAPNote(tempId);
-        setNotes((prev) => prev.map((n) => (n.id === tempId ? finalNote : n)));
+        setNotes((prev) =>
+          prev.map((n) => (n.id === tempId ? finalNote : n))
+        );
       } catch (syncErr) {
-        // Note persists locally with temp ID — user still has it
         console.warn("[useSOAP] Metadata sync failed, note saved locally:", syncErr);
       }
 
       setGeneration({ status: "done", note: finalNote });
       return finalNote;
     },
-    [supabase] // clinicianId intentionally removed — not used inside
+    [supabase]
   );
 
   const deleteNote = useCallback(
-    async (id: string) => {
-      const { data: { session } } = await supabase.auth.getSession();
-      const token = session?.access_token;
+    async (id: string): Promise<void> => {
+      const sessionResult = await supabase.auth.getSession();
+      const token = sessionResult.data.session?.access_token;
       if (!token) throw new Error("Not authenticated");
 
       await fetch(`/api/soap/notes/${id}`, {
@@ -154,9 +184,19 @@ export function useSOAP(_clinicianId: string) {
     [supabase]
   );
 
-  const resetGeneration = useCallback(() => {
+  const resetGeneration = useCallback((): void => {
     setGeneration({ status: "idle" });
   }, []);
 
   return { notes, loading, generation, generate, deleteNote, resetGeneration };
+}
+
+/**
+ * Generates a temporary client-side ID without relying on crypto.randomUUID(),
+ * which requires lib.dom.d.ts (TS 5.2+) or @types/node ≥ 18.16 to type-check
+ * cleanly. This avoids any ambiguity between local dev and CI build environments
+ * having different global type definitions available.
+ */
+function generateTempId(): string {
+  return `temp-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
 }

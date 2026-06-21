@@ -1,4 +1,4 @@
-# QVAC Health 🧠🔒
+# QVAC Health 
 
 > A local-first, privacy-preserving mental health companion and clinical documentation tool powered entirely by the QVAC SDK.
 

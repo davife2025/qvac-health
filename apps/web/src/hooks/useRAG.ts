@@ -6,6 +6,13 @@ import type { RAGSearchResult } from "@qvac-health/types";
 
 export type { RAGSearchResult };
 
+interface RagApiResponse {
+  ok: boolean;
+  data?: RAGSearchResult[];
+  error?: string;
+  code?: string;
+}
+
 // ─── Journal RAG ─────────────────────────────────────────────────────────────
 
 export function useJournalRAG() {
@@ -15,7 +22,7 @@ export function useJournalRAG() {
 
   const supabase = useRef(createClient()).current;
 
-  const getToken = useCallback(async () => {
+  const getToken = useCallback(async (): Promise<string | null> => {
     const { data: { session } } = await supabase.auth.getSession();
     return session?.access_token ?? null;
   }, [supabase]);
@@ -26,7 +33,7 @@ export function useJournalRAG() {
     mood: number;
     tags: string[];
     createdAt: string;
-  }) => {
+  }): Promise<void> => {
     const token = await getToken();
     if (!token) return;
 
@@ -41,9 +48,9 @@ export function useJournalRAG() {
       });
 
       if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        // Bug fix: 503 EMBEDDINGS_NOT_LOADED is expected when model isn't
-        // loaded yet — log at debug level, not as an error
+        const body: { code?: string; error?: string } = await res
+          .json()
+          .catch(() => ({}));
         if (body.code === "EMBEDDINGS_NOT_LOADED") {
           console.debug("[RAG] Skipping ingest — embeddings not loaded yet");
           return;
@@ -51,12 +58,11 @@ export function useJournalRAG() {
         console.warn("[RAG] Journal ingest failed:", body.error);
       }
     } catch (err) {
-      // Network errors during background ingest are non-blocking
       console.warn("[RAG] Journal ingest network error (non-blocking):", err);
     }
   }, [getToken]);
 
-  const search = useCallback(async (query: string, topK = 4) => {
+  const search = useCallback(async (query: string, topK = 4): Promise<void> => {
     if (!query.trim()) {
       setResults([]);
       return;
@@ -81,11 +87,11 @@ export function useJournalRAG() {
         body: JSON.stringify({ query, topK }),
       });
 
-      const json = await res.json();
-      if (json.ok) {
+      const json: RagApiResponse = await res.json();
+      if (json.ok && json.data) {
         setResults(json.data);
       } else {
-        setError(json.error);
+        setError(json.error ?? "Search failed");
         setResults([]);
       }
     } catch (err) {
@@ -96,7 +102,7 @@ export function useJournalRAG() {
     }
   }, [getToken]);
 
-  const clear = useCallback(() => {
+  const clear = useCallback((): void => {
     setResults([]);
     setError(null);
   }, []);
@@ -113,7 +119,7 @@ export function useSOAPRAG() {
 
   const supabase = useRef(createClient()).current;
 
-  const getToken = useCallback(async () => {
+  const getToken = useCallback(async (): Promise<string | null> => {
     const { data: { session } } = await supabase.auth.getSession();
     return session?.access_token ?? null;
   }, [supabase]);
@@ -123,7 +129,7 @@ export function useSOAPRAG() {
     patientRef: string;
     soap: { subjective: string; objective: string; assessment: string; plan: string };
     generatedAt: string;
-  }) => {
+  }): Promise<void> => {
     const token = await getToken();
     if (!token) return;
 
@@ -150,7 +156,9 @@ export function useSOAPRAG() {
       });
 
       if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
+        const body: { code?: string; error?: string } = await res
+          .json()
+          .catch(() => ({}));
         if (body.code === "EMBEDDINGS_NOT_LOADED") {
           console.debug("[RAG] Skipping SOAP ingest — embeddings not loaded yet");
           return;
@@ -165,7 +173,7 @@ export function useSOAPRAG() {
   const search = useCallback(async (
     query: string,
     options: { patientRef?: string; topK?: number } = {}
-  ) => {
+  ): Promise<void> => {
     if (!query.trim()) {
       setResults([]);
       return;
@@ -194,11 +202,11 @@ export function useSOAPRAG() {
         }),
       });
 
-      const json = await res.json();
-      if (json.ok) {
+      const json: RagApiResponse = await res.json();
+      if (json.ok && json.data) {
         setResults(json.data);
       } else {
-        setError(json.error);
+        setError(json.error ?? "Search failed");
         setResults([]);
       }
     } catch (err) {
@@ -209,7 +217,7 @@ export function useSOAPRAG() {
     }
   }, [getToken]);
 
-  const clear = useCallback(() => {
+  const clear = useCallback((): void => {
     setResults([]);
     setError(null);
   }, []);

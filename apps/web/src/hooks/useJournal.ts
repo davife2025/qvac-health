@@ -43,7 +43,7 @@ export function useJournal(userId: string) {
   const supabase = useMemo(() => createClient(), []);
   const savingRef = useRef(false);
 
-  const loadEntries = useCallback(async (pageIndex = 0) => {
+  const loadEntries = useCallback(async (pageIndex = 0): Promise<void> => {
     setLoading(true);
     setError(null);
     try {
@@ -90,14 +90,14 @@ export function useJournal(userId: string) {
     loadEntries(0);
   }, [loadEntries]);
 
-  const loadMore = useCallback(() => {
+  const loadMore = useCallback((): void => {
     if (!loading && hasMore) {
       loadEntries(pageRef.current + 1);
     }
   }, [loading, hasMore, loadEntries]);
 
   const saveEntry = useCallback(
-    async (content: string, mood: MoodLevel, tags: string[]) => {
+    async (content: string, mood: MoodLevel, tags: string[]): Promise<LocalEntry> => {
       if (savingRef.current) throw new Error("Save already in progress");
       savingRef.current = true;
       try {
@@ -143,7 +143,7 @@ export function useJournal(userId: string) {
   );
 
   const attachAIResponse = useCallback(
-    async (id: string, aiResponse: string) => {
+    async (id: string, aiResponse: string): Promise<void> => {
       const local = await getContent(id);
       if (!local) return;
       await saveContent({ ...local, aiResponse });
@@ -155,12 +155,11 @@ export function useJournal(userId: string) {
   );
 
   const deleteEntry = useCallback(
-    async (id: string) => {
+    async (id: string): Promise<void> => {
       const { data: { session } } = await supabase.auth.getSession();
       const token = session?.access_token;
       if (!token) throw new Error("Not authenticated");
 
-      // Fix #10: optimistic removal with rollback on failure
       const prevEntries = entries;
       setEntries((prev) => prev.filter((e) => e.id !== id));
 
@@ -170,15 +169,12 @@ export function useJournal(userId: string) {
           headers: { Authorization: `Bearer ${token}` },
         });
 
-        // 404 = already gone remotely, that's fine
         if (!res.ok && res.status !== 404) {
           throw new Error("Failed to delete entry");
         }
 
-        // Only delete local content after remote confirms
         await deleteContent(id);
       } catch (err) {
-        // Rollback optimistic removal
         setEntries(prevEntries);
         throw err;
       }

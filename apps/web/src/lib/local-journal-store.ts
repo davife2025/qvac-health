@@ -1,14 +1,12 @@
 /**
  * local-journal-store.ts — on-device journal content via IndexedDB.
  *
- * S8 fix: uses shared openDB() from local-db.ts instead of its own
- * openDB() at DB_VERSION=1. Eliminates the version deadlock with local-soap-store.
+ * Imports local-db without a file extension — see note in local-db.ts.
  */
 
-import { openDB, getStore, STORE_JOURNAL } from "./local-db.js";
+import { openDB, getStore, STORE_JOURNAL } from "./local-db";
 
-// Re-export hashContent from shared module (removes duplication)
-export { hashContent } from "./local-db.js";
+export { hashContent } from "./local-db";
 
 export interface JournalContent {
   id: string;

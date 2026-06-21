@@ -30,14 +30,10 @@ export function ClinicianView({ clinicianId }: ClinicianViewProps) {
 
   const handleGenerate = async (rawNotes: string, patientRef: string) => {
     setSelectedNote(null);
-    // Bug fix: generate() returns the finalNote (real UUID after Supabase sync).
-    // Always ingest using the returned note, not a captured reference.
     const note = await generate(rawNotes, patientRef);
     setSelectedNote(note);
     setTab("new");
 
-    // Ingest the finalNote — id is the real UUID if sync succeeded,
-    // or temp UUID if it failed (ingest will use whatever id it has)
     ingestSOAP({
       noteId: note.id,
       patientRef: note.patientRef,
@@ -58,9 +54,9 @@ export function ClinicianView({ clinicianId }: ClinicianViewProps) {
   };
 
   const TABS: { id: Tab; label: string }[] = [
-    { id: "new",     label: "New note" },
+    { id: "new", label: "New note" },
     { id: "history", label: `History${notes.length > 0 ? ` (${notes.length})` : ""}` },
-    { id: "search",  label: "Search" },
+    { id: "search", label: "Search" },
   ];
 
   return (
@@ -82,7 +78,6 @@ export function ClinicianView({ clinicianId }: ClinicianViewProps) {
       {modelReady && (
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
           <div className="lg:col-span-2 space-y-6">
-            {/* Tabs */}
             <div className="flex gap-1 rounded-xl bg-gray-100 p-1 w-full sm:w-fit overflow-x-auto">
               {TABS.map((t) => (
                 <button
@@ -151,7 +146,6 @@ export function ClinicianView({ clinicianId }: ClinicianViewProps) {
             )}
           </div>
 
-          {/* Sidebar */}
           <div className="space-y-4">
             {loading ? (
               <div className="card text-center py-8 text-gray-400 text-sm">

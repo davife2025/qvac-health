@@ -1,14 +1,14 @@
 /**
  * local-db.ts — single source of truth for all IndexedDB access.
  *
- * Fixes:
- *   - S4's local-journal-store opened DB at v1
- *   - S5's local-soap-store opened DB at v2
- *   - Two concurrent openDB() calls to the same DB name at different versions
- *     causes a versionchange deadlock in production browsers.
- *
- * Solution: one openDB() call, one version, both stores created here.
+ * One openDB() call, one version, both stores created here.
  * Both local-journal-store and local-soap-store import from this module.
+ *
+ * Note: no file extension on imports — Next.js's bundler resolution
+ * (moduleResolution: "Bundler") resolves extensionless TS imports
+ * correctly via webpack/SWC. Using explicit ".js" extensions here
+ * (copied from the Node-ESM apps/api codebase, which DOES need them)
+ * causes "Module not found" in Next.js's build step.
  */
 
 export const DB_NAME = "qvac-health";
@@ -20,7 +20,6 @@ export const STORE_SOAP = "soap_content";
 let dbPromise: Promise<IDBDatabase> | null = null;
 
 export function openDB(): Promise<IDBDatabase> {
-  // Singleton promise — only one open() call ever in flight
   if (dbPromise) return dbPromise;
 
   dbPromise = new Promise((resolve, reject) => {
@@ -30,12 +29,10 @@ export function openDB(): Promise<IDBDatabase> {
       const db = (e.target as IDBOpenDBRequest).result;
       const oldVersion = e.oldVersion;
 
-      // v1 → journal store
       if (oldVersion < 1) {
         db.createObjectStore(STORE_JOURNAL, { keyPath: "id" });
       }
 
-      // v2 → soap store
       if (oldVersion < 2) {
         if (!db.objectStoreNames.contains(STORE_SOAP)) {
           const soapStore = db.createObjectStore(STORE_SOAP, { keyPath: "id" });
@@ -47,15 +44,12 @@ export function openDB(): Promise<IDBDatabase> {
     req.onsuccess = () => resolve(req.result);
 
     req.onerror = () => {
-      dbPromise = null; // allow retry
+      dbPromise = null;
       reject(req.error);
     };
 
-    // Another tab has a connection open at an older version
     req.onblocked = () => {
-      console.warn(
-        "[local-db] DB upgrade blocked — close other tabs and reload."
-      );
+      console.warn("[local-db] DB upgrade blocked — close other tabs and reload.");
     };
   });
 
@@ -72,7 +66,8 @@ export function getStore(
 
 /**
  * SHA-256 hash of a string — used to generate content_hash for Supabase metadata.
- * Single definition, imported by both journal and SOAP stores.
+ * Uses Web Crypto's subtle.digest, available in all modern browsers without
+ * needing Node's crypto module or any lib-target gymnastics.
  */
 export async function hashContent(content: string): Promise<string> {
   const buf = await crypto.subtle.digest(

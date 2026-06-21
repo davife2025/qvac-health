@@ -1,14 +1,13 @@
 /**
  * local-soap-store.ts — on-device SOAP content via IndexedDB.
  *
- * S8 fix: uses shared openDB() from local-db.ts.
- * Eliminates the version deadlock with local-journal-store.
+ * Uses shared openDB() from local-db.ts. Types exported cleanly for
+ * `import type` consumption in useSOAP.ts.
  */
 
-import { openDB, getStore, STORE_SOAP } from "./local-db.js";
+import { openDB, getStore, STORE_SOAP } from "./local-db";
 
-// Re-export hashContent from shared module (removes duplication)
-export { hashContent } from "./local-db.js";
+export { hashContent } from "./local-db";
 
 export interface SOAPFields {
   subjective: string;
